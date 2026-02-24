@@ -1,0 +1,139 @@
+# 离线模式配置
+# 用于处理本地视频文件 + SRT字幕
+
+mode: "offline"
+
+# 输入配置
+input:
+  # 视频文件路径 (可以通过命令行参数覆盖)
+  video_path: "./data/input/videos/DJI_0001.MP4"
+  
+  # 是否自动查找同名的SRT文件
+  auto_find_srt: true
+  
+  # SRT文件路径 (如果不自动查找，手动指定)
+  srt_path: ""
+  
+  # 临时文件存储路径
+  temp_dir: "./data/temp/srt"
+
+# SRT提取配置
+srt_extraction:
+  # 是否从视频中提取SRT字幕轨道
+  extract_embedded_srt: true
+  
+  # FFmpeg可执行文件路径 (如果在PATH中，可以直接使用"ffmpeg")
+  ffmpeg_path: "ffmpeg"
+  
+  # 字幕轨道索引 (通常是0，表示第一个字幕轨道)
+  subtitle_stream_index: 0
+
+# 视频处理配置
+video_processing:
+  # 是否跳帧处理 (设置为15表示每15帧处理一次，适合河岸四乱检测)
+  frame_skip: 15
+  
+  # 起始帧 (从第几帧开始处理)
+  start_frame: 0
+  
+  # 结束帧 (0表示处理到视频结束)
+  end_frame: 0
+  
+  # 是否显示处理进度
+  show_progress: true
+  
+  # 视频缓冲区大小
+  buffer_size: 30
+
+# OCR配置（当SRT不可用时）
+ocr:
+  # 是否启用OCR作为备用
+  enabled: true  # 已修复PaddlePaddle版本，重新启用OCR
+  
+  # OCR引擎配置
+  engine: "paddleocr"
+  language: "ch"  # 中文识别
+  
+  # 感兴趣区域（ROI）- 左上角OSD区域
+  # 根据视频分辨率调整，这里是常见的DJI无人机OSD位置
+  # 注意：宽度需要足够覆盖完整的GPS和高度数据（包括小数部分）
+  roi:
+    x: 0
+    y: 0
+    width: 800  # 扩大到800以完整捕获高度小数部分
+    height: 300
+  
+  # OCR识别频率（每N帧识别一次，减少性能开销）
+  frame_interval: 5
+  
+  # 是否使用GPU加速OCR
+  use_gpu: false
+
+# 数据同步配置
+data_sync:
+  # 同步方式: "timestamp" (时间戳) 或 "frame_number" (帧号)
+  sync_method: "timestamp"
+  
+  # 时间戳容差 (毫秒)
+  timestamp_tolerance: 100
+  
+  # 如果找不到匹配的位姿数据，是否跳过该帧
+  skip_unmatched_frames: false
+
+# 输出配置
+output:
+  # CSV输出路径
+  csv_path: "./data/output/csv/detections_offline.csv"
+  
+  # 是否保存检测目标截图
+  save_images: true
+  
+  # 截图保存路径
+  image_dir: "./data/output/images/"
+  
+  # 截图格式: "crop" (只保存目标区域) 或 "full" (保存整帧带标注)
+  image_format: "full"
+  
+  # 图片质量 (1-100)
+  image_quality: 90
+  
+  # 是否生成HTML可视化报告
+  generate_html_report: false
+  
+  # HTML报告路径
+  html_report_path: "./data/output/report.html"
+
+# 可视化配置
+visualization:
+  # 是否实时显示处理结果
+  realtime_display: true
+  
+  # 显示窗口尺寸
+  display_width: 1280
+  display_height: 720
+  
+  # 是否在图像上绘制检测框
+  draw_boxes: true
+  
+  # 是否显示类别标签
+  show_labels: true
+  
+  # 是否显示置信度
+  show_confidence: true
+  
+  # 检测框颜色 (BGR格式)
+  box_color: [0, 255, 0]  # 绿色
+  
+  # 线条粗细
+  box_thickness: 2
+
+# 日志配置
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # 是否保存日志到文件
+  save_to_file: true
+  
+  # 日志文件路径
+  log_file: "./data/output/offline_log.txt"

@@ -1,0 +1,70 @@
+# YOLO 模型配置
+
+model:
+  # 模型路径
+  path: "./models/yolov11x.pt"
+  
+  # 模型类型
+  type: "yolov11x"
+  
+  # 推理设备 (cuda, cpu)
+  device: "cuda"  # GPU模式（需要CUDA版本的PyTorch）
+  
+  # 是否使用半精度推理 (需要GPU支持，速度翻倍)
+  half_precision: true
+
+# 检测参数
+detection:
+  # 置信度阈值（河岸四乱检测：提高阈值减少误检）
+  confidence_threshold: 0.35
+  
+  # IoU阈值 (用于NMS)
+  iou_threshold: 0.45
+  
+  # 最大检测数量
+  max_detections: 300
+  
+  # 图像尺寸 (模型输入尺寸，正射图片建议使用更大尺寸)
+  imgsz: 1280
+  
+  # 是否对图像进行预处理增强
+  augment: false
+
+# 目标类别 (根据训练的模型调整)
+classes:
+  # 如果为空，检测所有类别
+  # 如果指定，只检测指定类别的ID
+  target_classes: null  # null表示检测所有类别，或指定类别ID列表如: [0, 1, 2]
+  
+  # 类别名称映射 (根据实际训练模型调整)
+  names:
+    0: "Water Bodies"
+    1: "Vegetation"
+    2: "Mining Area"
+    3: "Debris"
+    4: "Industrial Buildings"
+    5: "Waterway Facilities"
+    6: "Hydraulic Controls"
+    7: "Residences"
+    8: "Sheds"
+    9: "Storage Zones"
+    10: "Recreation Areas"
+
+# 批处理设置
+batch:
+  # 批处理大小 (实时模式建议设为1)
+  size: 1
+  
+  # 是否启用批处理 (离线模式可以启用以提高速度)
+  enabled: false
+
+# 性能优化
+optimization:
+  # 是否使用TensorRT加速 (需要安装TensorRT)
+  use_tensorrt: false
+  
+  # 是否使用ONNX Runtime (需要导出ONNX模型)
+  use_onnx: false
+  
+  # 多线程数量
+  num_threads: 4

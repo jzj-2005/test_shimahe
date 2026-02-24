@@ -1,0 +1,57 @@
+# DJI 4TD 相机参数配置
+# 这些参数用于像素坐标到地理坐标的转换
+
+camera:
+  # 相机型号
+  model: "DJI_M4TD"
+  
+  # 图像分辨率 (宽 x 高, 单位: 像素)
+  resolution:
+    width: 4032  # 根据实际相机调整
+    height: 3024
+  
+  # 传感器尺寸 (单位: mm)
+  sensor_size:
+    width: 13.4  # 1/1.3英寸传感器的典型尺寸，需根据实际相机确认
+    height: 9.6
+  
+  # 焦距 (单位: mm)
+  focal_length: 7.0  # 根据实际相机参数调整
+  
+  # 主点坐标 (图像中心, 单位: 像素)
+  # 通常设置为图像中心，如果有相机标定结果可以更新
+  principal_point:
+    cx: 2736  # width / 2
+    cy: 1824  # height / 2
+  
+  # 畸变系数 (如果不考虑畸变，保持为0)
+  distortion:
+    k1: 0.0
+    k2: 0.0
+    p1: 0.0
+    p2: 0.0
+    k3: 0.0
+
+# 正射投影模式参数
+orthogonal_mode:
+  # 假设严格垂直拍摄
+  assume_vertical: true
+  
+  # 俯仰角 (度)
+  pitch: -90.0
+  
+  # 是否使用姿态角修正 (false表示使用简化算法)
+  use_attitude_correction: false
+
+# 地球参数 (用于经纬度转换)
+# 坐标系说明：
+# - 输入：无人机GPS坐标为WGS84（DJI飞控标准，EPSG:4326）
+# - 输出：检测目标坐标为CGCS2000（中国国家标准，EPSG:4490）
+# - 转换精度：优于0.1米
+earth:
+  # 每度纬度对应的地面距离 (米)
+  meters_per_degree_lat: 110540
+  
+  # 每度经度对应的地面距离 (米，在赤道处)
+  # 实际使用时需要乘以 cos(latitude)
+  meters_per_degree_lon: 111320

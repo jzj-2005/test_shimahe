@@ -1,0 +1,25 @@
+# 正射图片处理所需依赖
+# 最小化依赖列表，不包含RTSP流处理相关包
+
+# 图像处理
+opencv-python>=4.8.0
+pillow>=10.0.0
+
+# 深度学习 - YOLO检测
+ultralytics>=8.1.0
+torch>=2.0.0
+torchvision>=0.15.0
+
+# 数据处理
+numpy>=1.24.0
+pandas>=2.0.0
+
+# 配置和工具
+pyyaml>=6.0.0
+tqdm>=4.66.0
+
+# 日志
+loguru>=0.7.2
+
+# 可视化（可选）
+matplotlib>=3.7.0

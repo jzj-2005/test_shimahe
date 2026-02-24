@@ -1,0 +1,279 @@
+# 实时模式配置
+# 用于处理RTSP视频流 + MQTT位姿数据
+# 设备型号: DJI M3TD/M4TD
+# 数据源: RTSP视频流 + MQTT OSD主题位姿数据
+
+mode: "realtime"
+
+# RTSP流配置
+rtsp:
+  # RTSP流地址
+  url: "rtsp://192.168.1.100:8554/live"
+  
+  # 连接超时 (秒)
+  connection_timeout: 10
+  
+  # 读取超时 (秒)
+  read_timeout: 5
+  
+  # 断线重连间隔 (秒)
+  reconnect_interval: 5
+  
+  # 最大重连次数 (0表示无限重连)
+  max_reconnect_attempts: 0
+  
+  # 视频缓冲区大小 (帧数)
+  buffer_size: 30
+  
+  # 传输协议: "tcp" 或 "udp"
+  transport_protocol: "tcp"
+
+# MQTT配置
+# DJI Cloud API MQTT连接参数
+# 配置指南: docs/DJI_MQTT_SETUP.md
+# 
+# ⚠️ 重要提示：以下配置需要从DJI开发者平台获取
+# 1. 注册DJI开发者账号: https://developer.dji.com/
+# 2. 创建应用，获取App Key和App Secret
+# 3. 绑定M3TD/M4TD设备，获取设备SN码
+mqtt:
+  # ========== MQTT服务器配置 ==========
+  
+  # MQTT服务器地址
+  # 中国大陆: mqtt-cn.dji.com
+  # 其他地区: mqtt-us.dji.com
+  # 注意：下面的IP地址是示例，实际部署时需要改为DJI官方地址
+  broker: "mqtt-cn.dji.com"  # ⚠️ 修改为DJI官方MQTT服务器
+  
+  # 端口
+  # 1883: 标准MQTT端口（TCP明文）
+  # 8883: MQTT over SSL/TLS（加密，推荐生产环境）
+  port: 1883  # ⚠️ 生产环境建议使用8883（需配置SSL）
+  
+  # ========== 认证信息配置 ==========
+  
+  # 用户名 - 使用DJI开发者平台的App Key
+  # 获取方式:
+  # 1. 访问 https://developer.dji.com/
+  # 2. 登录后进入"控制台"
+  # 3. 创建应用（应用类型选择"云服务应用"）
+  # 4. 在"应用详情"中复制App Key
+  # 示例: "1234567890abcdef1234567890abcdef"
+  username: "[请填写DJI App Key]"  # ⚠️ 必须修改！从DJI开发者平台获取
+  
+  # 密码 - 使用DJI开发者平台的App Secret
+  # 在创建应用后，从"应用详情"中复制App Secret
+  # 示例: "abcdefghijklmnopqrstuvwxyz123456"
+  password: "[请填写DJI App Secret]"  # ⚠️ 必须修改！从DJI开发者平台获取
+  
+  # 客户端ID (唯一标识)
+  # 建议格式: {项目名称}_{环境}_{编号}
+  # 示例: "stone_river_inspection_prod_001"
+  # 注意：同一client_id不能同时连接多次
+  client_id: "stone_river_inspection_realtime_001"  # ⚠️ 建议修改为项目专用ID
+  
+  # ========== 订阅主题配置 ==========
+  
+  # 主题格式: thing/product/{gateway_sn}/{sub_topic}
+  # {gateway_sn}: M3TD/M4TD设备序列号（15-20位字母数字组合）
+  #
+  # 设备SN获取方法:
+  # 方法1: 从DJI Pilot 2查看
+  #   - 打开DJI Pilot 2 App
+  #   - 连接M3TD/M4TD无人机或机场
+  #   - 进入"设置" → "关于" → "设备信息"
+  #   - 查看并复制设备序列号（SN）
+  #
+  # 方法2: 从机场设备查看
+  #   - 登录机场管理界面
+  #   - 进入"系统信息"或"设备信息"
+  #   - 查看设备序列号
+  #
+  # 方法3: 从DJI开发者平台查看
+  #   - 登录开发者平台
+  #   - 应用管理 → 设备管理
+  #   - 查看已绑定设备的SN码
+  topics:
+    # ========== OSD主题（推荐用于M3TD/M4TD）==========
+    # OSD主题包含完整的飞行遥测数据：GPS、高度、姿态、速度、电池等
+    # 推送频率: 约10Hz（每秒10次）
+    # 数据格式: JSON，包含latitude, longitude, altitude, attitude等字段
+    #
+    # 主题格式: thing/product/{设备SN}/osd
+    # 示例: "thing/product/1581F5BKD233200012AB/osd"
+    aircraft_state: "thing/product/[请填写M3TD/M4TD设备SN]/osd"  # ⚠️ 必须修改！替换设备SN
+    
+    # 可选: 设备在线状态（用于监测设备是否在线）
+    # device_online: "thing/product/[请填写设备SN]/online"
+    
+    # 可选: 设备事件（用于接收异常告警等事件）
+    # device_events: "thing/product/[请填写设备SN]/events"
+    
+    # ========== 注意事项 ==========
+    # 1. 确保将上面的 [请填写M3TD/M4TD设备SN] 替换为实际的设备序列号
+    # 2. M3TD/M4TD必须使用 /osd 主题，不要使用 /state 主题
+    # 3. 设备必须在线才能接收到数据
+    # 4. 需要在DJI Pilot 2中启用"数据推送"功能
+  
+  # QoS级别: 0, 1, 2
+  qos: 1
+  
+  # 是否保持连接
+  keep_alive: 60
+  
+  # 连接超时 (秒)
+  connection_timeout: 10
+  
+  # 断线重连间隔 (秒)
+  reconnect_interval: 5
+  
+  # 位姿数据缓冲区大小
+  pose_buffer_size: 100
+
+# 数据同步配置
+data_sync:
+  # 帧与位姿数据的最大时间差 (毫秒)
+  max_time_diff: 500
+  
+  # 同步策略: "nearest" (最近邻) 或 "interpolate" (插值)
+  sync_strategy: "nearest"
+  
+  # 如果找不到匹配的位姿数据，是否跳过该帧
+  skip_unmatched_frames: true
+  
+  # 位姿数据缓存时间 (秒)
+  pose_cache_duration: 10
+
+# OCR备用配置
+# 当MQTT位姿数据不可用时使用OCR识别视频画面
+ocr_fallback:
+  # 是否启用OCR备用功能
+  enabled: true
+  
+  # OCR引擎配置
+  engine: "paddleocr"
+  language: "ch"  # 中文识别
+  
+  # 感兴趣区域（ROI）- 左上角OSD区域
+  # 注意：宽度需要足够覆盖完整的GPS和高度数据（包括小数部分）
+  roi:
+    x: 0
+    y: 0
+    width: 800  # 扩大到800以完整捕获高度小数部分
+    height: 300
+  
+  # OCR识别频率（每N帧识别一次）
+  # 实时模式建议设置较大值以降低性能开销
+  frame_interval: 10
+  
+  # 是否使用GPU加速OCR
+  use_gpu: false
+
+# 实时处理配置
+realtime_processing:
+  # 处理帧率 (FPS, 0表示尽可能快地处理)
+  target_fps: 0
+  
+  # 是否跳帧处理 (1表示处理每一帧, 2表示每两帧处理一次)
+  frame_skip: 1
+  
+  # 延迟要求 (秒) - 用于性能监控
+  latency_requirement: 5.0
+  
+  # 是否启用多线程处理
+  enable_multithreading: true
+  
+  # 工作线程数量
+  num_worker_threads: 4
+
+# 输出配置
+output:
+  # CSV输出路径
+  csv_path: "./data/output/csv/detections_realtime.csv"
+  
+  # CSV写入模式: "append" (追加) 或 "overwrite" (覆盖)
+  csv_write_mode: "append"
+  
+  # 是否保存检测目标截图
+  save_images: true
+  
+  # 截图保存路径
+  image_dir: "./data/output/images/"
+  
+  # 截图格式: "crop" (只保存目标区域) 或 "full" (保存整帧带标注)
+  image_format: "full"
+  
+  # 图片质量 (1-100)
+  image_quality: 85
+  
+  # 是否实时推送检测结果 (例如通过WebSocket)
+  enable_realtime_push: false
+  
+  # 推送服务器地址
+  push_server_url: "ws://localhost:8080/detections"
+
+# 可视化配置
+visualization:
+  # 是否实时显示处理结果
+  realtime_display: true
+  
+  # 显示窗口尺寸
+  display_width: 1280
+  display_height: 720
+  
+  # 是否在图像上绘制检测框
+  draw_boxes: true
+  
+  # 是否显示类别标签
+  show_labels: true
+  
+  # 是否显示置信度
+  show_confidence: true
+  
+  # 是否显示GPS和高度信息
+  show_gps_info: true
+  
+  # 是否显示FPS和延迟信息
+  show_performance_info: true
+  
+  # 检测框颜色 (BGR格式)
+  box_color: [0, 255, 0]  # 绿色
+  
+  # 线条粗细
+  box_thickness: 2
+
+# 性能监控配置
+performance:
+  # 是否启用性能监控
+  enable_monitoring: true
+  
+  # 性能统计输出间隔 (秒)
+  stats_interval: 10
+  
+  # 是否记录每帧的处理时间
+  log_frame_times: false
+
+# 日志配置
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # 是否保存日志到文件
+  save_to_file: true
+  
+  # 日志文件路径
+  log_file: "./data/output/realtime_log.txt"
+  
+  # 是否启用详细的调试信息
+  verbose: false
+
+# 异常处理配置
+error_handling:
+  # 连续失败多少次后停止 (0表示永不停止)
+  max_consecutive_failures: 10
+  
+  # 是否在出错时保存错误帧
+  save_error_frames: true
+  
+  # 错误帧保存路径
+  error_frame_dir: "./data/output/error_frames/"

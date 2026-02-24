@@ -1,0 +1,99 @@
+# 实时模式配置示例
+# 这是一个已填写参数的配置示例，供参考
+
+mode: "realtime"
+
+# RTSP流配置示例
+rtsp:
+  # RTSP流地址（根据实际情况填写）
+  # 示例: "rtsp://192.168.1.100:8554/live"
+  url: "rtsp://192.168.1.100:8554/drone_stream"
+  
+  connection_timeout: 10
+  read_timeout: 5
+  reconnect_interval: 5
+  max_reconnect_attempts: 0  # 0表示无限重连
+  buffer_size: 30
+  transport_protocol: "tcp"
+
+# DJI MQTT配置示例
+mqtt:
+  # MQTT服务器（中国大陆）
+  broker: "mqtt-cn.dji.com"
+  port: 1883
+  
+  # 认证信息（示例值，需替换为实际值）
+  username: "1234567890abcdef1234567890abcdef"  # 替换为你的App Key
+  password: "abcdefghijklmnopqrstuvwxyz123456"  # 替换为你的App Secret
+  client_id: "water_inspection_app_001"         # 替换为你的App ID
+  
+  # 订阅主题（使用实际设备SN）
+  topics:
+    # 无人机状态主题（包含GPS、高度、姿态）
+    aircraft_state: "thing/product/1581F5BKD233200012AB/state"  # 替换设备SN
+    
+    # 可选主题
+    device_online: "thing/product/1581F5BKD233200012AB/online"
+  
+  qos: 1
+  keep_alive: 60
+  connection_timeout: 10
+  reconnect_interval: 5
+  pose_buffer_size: 100
+
+# 数据同步配置
+data_sync:
+  max_time_diff: 500.0        # 最大时间差(毫秒)
+  sync_strategy: "nearest"     # nearest或interpolate
+  skip_unmatched_frames: true
+  pose_cache_duration: 10
+
+# 实时处理配置
+realtime_processing:
+  target_fps: 0               # 0表示尽可能快
+  frame_skip: 1               # 1表示处理每一帧
+  latency_requirement: 5.0    # 延迟要求(秒)
+  enable_multithreading: true
+  num_worker_threads: 4
+
+# 输出配置
+output:
+  csv_path: "./data/output/csv/detections_realtime.csv"
+  csv_write_mode: "append"    # append或overwrite
+  save_images: true
+  image_dir: "./data/output/images/"
+  image_format: "full"        # full或crop
+  image_quality: 85
+  enable_realtime_push: false
+
+# 可视化配置
+visualization:
+  realtime_display: true
+  display_width: 1280
+  display_height: 720
+  draw_boxes: true
+  show_labels: true
+  show_confidence: true
+  show_gps_info: true
+  show_performance_info: true
+  box_color: [0, 255, 0]
+  box_thickness: 2
+
+# 性能监控
+performance:
+  enable_monitoring: true
+  stats_interval: 10
+  log_frame_times: false
+
+# 日志配置
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_file: "./data/output/realtime_log.txt"
+  verbose: false
+
+# 异常处理
+error_handling:
+  max_consecutive_failures: 10
+  save_error_frames: true
+  error_frame_dir: "./data/output/error_frames/"

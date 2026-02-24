@@ -1,0 +1,151 @@
+# 正射图片模式配置
+# 用于处理正射图片序列 + RTK位姿数据
+
+mode: "orthophoto"
+
+# 输入配置
+input:
+  # 图片目录路径
+  image_dir: "D:/Localsend/zhengshe"
+  
+  # 图片文件匹配模式 (支持glob模式)
+  image_pattern: "*.jpeg"
+  
+  # 是否自动查找MRK文件
+  auto_find_mrk: true
+  
+  # MRK文件路径 (如果auto_find_mrk为false，则使用此路径)
+  mrk_file: ""
+  
+  # 处理范围
+  start_index: 0  # 起始图片索引
+  end_index: 0    # 结束图片索引 (0表示处理到最后)
+  
+  # 跳帧处理 (1表示处理每一张图片)
+  skip: 1
+
+# 数据同步配置
+data_sync:
+  # 时间戳匹配容差 (毫秒)
+  # 图片时间戳与MRK位姿数据的最大允许时间差
+  # 注意：DJI图片和GPS数据可能有约20秒的时间差
+  time_tolerance: 25000.0
+  
+  # 如果找不到匹配的位姿数据，是否跳过该图片
+  skip_unmatched: true
+  
+  # 同步策略: "nearest" (最近邻)
+  sync_strategy: "nearest"
+
+# 边缘检测配置
+edge_detection:
+  # 是否启用边缘检测标记
+  enabled: true
+  
+  # 边缘距离阈值 (像素)
+  # 检测框距离图片边缘小于此值时标记为"可能不完整"
+  edge_threshold: 50
+
+# 输出配置
+output:
+  # CSV输出路径
+  csv_path: "./data/output/csv/detections_orthophoto.csv"
+  
+  # CSV写入模式: "append" (追加) 或 "overwrite" (覆盖)
+  csv_write_mode: "overwrite"
+  
+  # 是否保存检测目标截图
+  save_images: true
+  
+  # 截图保存路径
+  image_dir: "./data/output/images/orthophoto/"
+  
+  # 截图格式: "crop" (只保存目标区域) 或 "full" (保存整帧带标注)
+  image_format: "full"
+  
+  # 图片质量 (1-100)
+  image_quality: 85
+  
+  # 是否生成HTML可视化报告 (可选功能)
+  generate_html_report: false
+  
+  # HTML报告路径
+  html_report_path: "./data/output/orthophoto_report.html"
+
+# 可视化配置
+visualization:
+  # 是否实时显示处理结果
+  realtime_display: true
+  
+  # 显示窗口尺寸
+  display_width: 1280
+  display_height: 720
+  
+  # 是否在图像上绘制检测框
+  draw_boxes: true
+  
+  # 是否显示类别标签
+  show_labels: true
+  
+  # 是否显示置信度
+  show_confidence: true
+  
+  # 是否显示GPS信息
+  show_gps_info: true
+  
+  # 是否显示边缘标记
+  show_edge_marks: true
+  
+  # 是否显示处理进度和统计信息
+  show_progress_info: true
+  
+  # 检测框颜色 (BGR格式)
+  box_color: [0, 255, 0]  # 绿色
+  
+  # 边缘框颜色 (BGR格式)
+  edge_box_color: [0, 165, 255]  # 橙色
+  
+  # 线条粗细
+  box_thickness: 2
+
+# 性能配置
+performance:
+  # 是否启用多线程处理 (当前版本未实现)
+  enable_multithreading: false
+  
+  # 工作线程数量
+  num_worker_threads: 4
+  
+  # 批处理大小 (暂未实现批处理)
+  batch_size: 1
+
+# 日志配置
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+  
+  # 是否保存日志到文件
+  save_to_file: true
+  
+  # 日志文件路径
+  log_file: "./data/output/orthophoto_log.txt"
+  
+  # 是否启用详细的调试信息
+  verbose: false
+
+# 统计输出配置
+statistics:
+  # 是否启用统计
+  enabled: true
+  
+  # 统计输出间隔 (处理多少张图片后输出一次统计)
+  output_interval: 50
+  
+  # 统计信息包含的内容
+  include:
+    - total_images        # 总图片数
+    - processed_images    # 已处理图片数
+    - total_detections    # 总检测数
+    - edge_detections     # 边缘检测数
+    - avg_detections      # 平均每张检测数
+    - processing_speed    # 处理速度 (图片/秒)
