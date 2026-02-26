@@ -16,7 +16,7 @@ camera:
     height: 9.6
   
   # 焦距 (单位: mm)
-  focal_length: 7.0  # 根据实际相机参数调整
+  focal_length: 6.72  # 根据实际相机参数调整
   
   # 主点坐标 (图像中心, 单位: 像素)
   # 通常设置为图像中心，如果有相机标定结果可以更新
@@ -55,3 +55,36 @@ earth:
   # 每度经度对应的地面距离 (米，在赤道处)
   # 实际使用时需要乘以 cos(latitude)
   meters_per_degree_lon: 111320
+
+# 坐标转换器配置
+# 新增：支持选择简化版或增强版转换器
+coordinate_transform:
+  # 使用增强版转换器（支持完整3D姿态修正和GPS质量控制）
+  # true: 使用 coord_transform_new.py (增强版)
+  # false: 使用 coord_transform.py (简化版)
+  use_enhanced: false
+  
+  # GPS质量控制配置（仅增强版有效）
+  quality_control:
+    # 是否启用GPS质量控制
+    enabled: true
+    
+    # 最低GPS信号强度（0-5级，建议≥3）
+    min_gps_level: 3
+    
+    # 最少卫星数量（建议≥10）
+    min_satellite_count: 10
+    
+    # 是否跳过低质量数据（true=自动过滤，false=标记但仍处理）
+    skip_on_low_quality: true
+  
+  # 误差估算配置（仅增强版有效）
+  error_estimation:
+    # 是否启用误差估算
+    enabled: true
+    
+    # 普通GPS基础误差（米）
+    gps_base_error: 3.5
+    
+    # RTK基础误差（米，厘米级精度）
+    rtk_base_error: 0.05

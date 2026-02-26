@@ -21,7 +21,8 @@ class YOLODetector:
         half_precision: bool = False,
         imgsz: int = 640,
         class_names: Dict[int, str] = None,
-        target_classes: List[int] = None
+        target_classes: List[int] = None,
+        tracker_type: str = "bytetrack.yaml"
     ):
         """
         初始化YOLO检测器
@@ -35,6 +36,7 @@ class YOLODetector:
             imgsz: 模型输入图像尺寸
             class_names: 类别名称映射
             target_classes: 目标类别列表（如果为None则检测所有类别）
+            tracker_type: 跟踪器类型 ("bytetrack.yaml" 或 "botsort.yaml")
         """
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
@@ -44,6 +46,7 @@ class YOLODetector:
         self.imgsz = imgsz
         self.class_names = class_names or {}
         self.target_classes = target_classes
+        self.tracker_type = tracker_type
         
         # 加载模型
         self.model = None
@@ -223,6 +226,113 @@ class YOLODetector:
             all_detections.append(detections)
         
         return all_detections
+    
+    def detect_with_tracking(
+        self,
+        image: np.ndarray,
+        return_type: str = "corners",
+        edge_threshold: int = 50
+    ) -> List[Dict[str, Any]]:
+        """
+        带目标跟踪的检测，使用 model.track() 为每个目标分配持久 track_id。
+        强制启用边缘检测以支持 TrackManager 质量评分。
+        
+        Args:
+            image: 输入图像 (BGR格式)
+            return_type: 返回坐标类型 ("corners"=四角点, "xyxy"=左上右下)
+            edge_threshold: 边缘距离阈值（像素）
+            
+        Returns:
+            检测结果列表，每个字典包含 track_id 字段
+        """
+        if self.model is None:
+            logger.error("模型未加载")
+            return []
+        
+        if not hasattr(self, '_track_debug_logged'):
+            self._track_debug_logged = True
+            logger.info(f"[Tracking] tracker={self.tracker_type}, "
+                       f"conf={self.confidence_threshold}, imgsz={self.imgsz}")
+        
+        try:
+            results = self.model.track(
+                image,
+                conf=self.confidence_threshold,
+                iou=self.iou_threshold,
+                imgsz=self.imgsz,
+                half=self.half_precision,
+                persist=True,
+                tracker=self.tracker_type,
+                verbose=False
+            )
+            
+            self.inference_count += 1
+            detections = []
+            img_height, img_width = image.shape[:2]
+            
+            for result in results:
+                boxes = result.boxes
+                if boxes is None or len(boxes) == 0:
+                    continue
+                
+                xyxy = boxes.xyxy.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                classes = boxes.cls.cpu().numpy().astype(int)
+                
+                track_ids = None
+                if boxes.id is not None:
+                    track_ids = boxes.id.cpu().numpy().astype(int)
+                
+                for idx, (box_xyxy, conf, cls) in enumerate(zip(xyxy, confs, classes)):
+                    if self.target_classes is not None and cls not in self.target_classes:
+                        continue
+                    
+                    tid = int(track_ids[idx]) if track_ids is not None else None
+                    if tid is None:
+                        continue
+                    
+                    x1, y1, x2, y2 = box_xyxy
+                    detection = {
+                        'class_id': int(cls),
+                        'class_name': self.class_names.get(cls, f"class_{cls}"),
+                        'confidence': float(conf),
+                        'track_id': tid,
+                    }
+                    
+                    if return_type == "corners":
+                        detection['corners'] = [
+                            (float(x1), float(y1)),
+                            (float(x2), float(y1)),
+                            (float(x2), float(y2)),
+                            (float(x1), float(y2))
+                        ]
+                    else:
+                        detection['xyxy'] = box_xyxy.tolist()
+                    
+                    edge_info = self._check_box_on_edge(
+                        x1, y1, x2, y2,
+                        img_width, img_height,
+                        edge_threshold
+                    )
+                    detection['is_on_edge'] = edge_info['is_on_edge']
+                    detection['edge_positions'] = edge_info['positions']
+                    
+                    detections.append(detection)
+                
+                self.total_detections += len(detections)
+            
+            logger.debug(f"[Tracking] detected {len(detections)} targets with track_ids")
+            return detections
+            
+        except Exception as e:
+            logger.error(f"YOLO tracking detection error: {e}")
+            return []
+    
+    def reset_tracker(self):
+        """重置跟踪器状态（切换视频时调用）"""
+        if self.model is not None:
+            self.model.predictor = None
+            logger.info("Tracker state reset")
     
     def _check_box_on_edge(
         self,

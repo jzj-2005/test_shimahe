@@ -17,8 +17,8 @@ from .input.mqtt_client import DJIMQTTClient
 from .input.osd_ocr_reader import OSDOCRReader
 
 from .detection.yolo_detector import YOLODetector
+from .detection.track_manager import TrackManager
 from .transform.camera_model import CameraModel
-from .transform.coord_transform import CoordinateTransformer
 from .output.report_generator import ReportGenerator
 
 
@@ -93,6 +93,9 @@ class RealtimePipeline:
         detection_config = self.yolo_config.get('detection', {})
         classes_config = self.yolo_config.get('classes', {})
         
+        tracking_config = self.yolo_config.get('tracking', {})
+        self.tracking_enabled = tracking_config.get('enabled', False)
+        
         self.detector = YOLODetector(
             model_path=model_config.get('path', './models/yolov11x.pt'),
             confidence_threshold=detection_config.get('confidence_threshold', 0.5),
@@ -100,14 +103,36 @@ class RealtimePipeline:
             device=model_config.get('device', 'cuda'),
             half_precision=model_config.get('half_precision', False),
             class_names=classes_config.get('names', {}),
-            target_classes=classes_config.get('target_classes')
+            target_classes=classes_config.get('target_classes'),
+            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml')
         )
         
-        # 坐标转换器
-        self.camera_model = CameraModel(self.camera_config)
-        self.transformer = CoordinateTransformer(self.camera_model)
+        # 目标跟踪管理器（延迟保存策略）
+        self.track_manager = None
+        if self.tracking_enabled:
+            self.track_manager = TrackManager(tracking_config)
+            logger.info(">> Tracking dedup enabled (deferred save)")
         
-        # 报告生成器
+        # 坐标转换器（根据配置选择简化版或增强版）
+        self.camera_model = CameraModel(self.camera_config)
+        coord_config = self.camera_config.get('coordinate_transform', {})
+        
+        if coord_config.get('use_enhanced', False):
+            # 使用增强版转换器
+            from .transform.coord_transform_new import CoordinateTransformerEnhanced
+            quality_config = coord_config.get('quality_control', {})
+            self.transformer = CoordinateTransformerEnhanced(
+                camera_model=self.camera_model,
+                quality_config=quality_config
+            )
+            logger.info("✓ 使用增强版坐标转换器（3D姿态修正 + GPS质量控制）")
+        else:
+            # 使用简化版转换器
+            from .transform.coord_transform import CoordinateTransformer
+            self.transformer = CoordinateTransformer(self.camera_model)
+            logger.info("✓ 使用简化版坐标转换器（垂直投影）")
+        
+        # 报告生成器（v2.1新增：支持后处理）
         output_config = self.realtime_config.get('output', {})
         self.report_gen = ReportGenerator(
             csv_path=output_config.get('csv_path', './data/output/csv/detections_realtime.csv'),
@@ -115,7 +140,8 @@ class RealtimePipeline:
             save_images=output_config.get('save_images', True),
             image_format=output_config.get('image_format', 'full'),
             image_quality=output_config.get('image_quality', 85),
-            csv_write_mode=output_config.get('csv_write_mode', 'append')
+            csv_write_mode=output_config.get('csv_write_mode', 'append'),
+            post_process_config=output_config  # 传递完整配置以启用后处理
         )
         
         # 可视化器
@@ -238,16 +264,21 @@ class RealtimePipeline:
                 time.sleep(0.01)
                 continue
             
-            # YOLO检测
-            detections = self.detector.detect(frame)
-            
-            # 坐标转换
-            if detections:
-                detections = self.transformer.transform_detections(detections, pose)
-            
-            # 保存结果
-            if detections:
-                self.report_gen.save_realtime(detections, frame, pose, frame_count)
+            if self.tracking_enabled and self.track_manager:
+                # 跟踪模式：延迟保存
+                detections = self.detector.detect_with_tracking(frame)
+                if detections:
+                    self.track_manager.update(detections, frame, pose, frame_count)
+                self.track_manager.flush_lost_tracks(
+                    frame_count, self.transformer, self.report_gen
+                )
+            else:
+                # 常规模式
+                detections = self.detector.detect(frame)
+                if detections:
+                    detections = self.transformer.transform_detections(detections, pose)
+                if detections:
+                    self.report_gen.save_realtime(detections, frame, pose, frame_count)
             
             # 可视化
             if self.visualizer:
@@ -313,6 +344,14 @@ class RealtimePipeline:
         if self.visualizer:
             self.visualizer.close()
         
+        # 刷写所有剩余跟踪目标
+        if hasattr(self, 'track_manager') and self.track_manager:
+            try:
+                self.track_manager.flush_all(self.transformer, self.report_gen)
+                self.track_manager.print_stats()
+            except Exception as e:
+                logger.warning(f"刷写跟踪缓冲时出错: {e}")
+        
         # 打印最终统计
         logger.info("\n" + "="*50)
         logger.info("最终统计信息")
@@ -320,6 +359,13 @@ class RealtimePipeline:
         
         self.detector.print_stats()
         self.report_gen.print_stats()
+        
+        # 关闭报告生成器并触发后处理（v2.1新增）
+        if self.report_gen:
+            try:
+                self.report_gen.close()
+            except Exception as e:
+                logger.warning(f"关闭报告生成器时出错: {e}")
         
         logger.info("="*50)
         logger.info("实时处理流程已结束")

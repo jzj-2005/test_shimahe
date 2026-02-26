@@ -21,7 +21,8 @@ class ReportGenerator:
         save_images: bool = True,
         image_format: str = "full",
         image_quality: int = 90,
-        csv_write_mode: str = "overwrite"
+        csv_write_mode: str = "overwrite",
+        post_process_config: dict = None
     ):
         """
         初始化报告生成器
@@ -33,6 +34,7 @@ class ReportGenerator:
             image_format: 图像保存格式
             image_quality: 图像质量
             csv_write_mode: CSV写入模式
+            post_process_config: 后处理配置（可选）
         """
         self.csv_path = csv_path
         self.image_dir = image_dir
@@ -45,6 +47,18 @@ class ReportGenerator:
         self.image_saver = None
         if save_images:
             self.image_saver = ImageSaver(image_dir, image_format, image_quality)
+        
+        # 初始化后处理器（v2.1新增）
+        self.post_processor = None
+        if post_process_config:
+            try:
+                from .post_processor import PostProcessor
+                self.post_processor = PostProcessor(post_process_config)
+                if self.post_processor.is_enabled():
+                    logger.info("✓ 后处理器已启用（将在检测完成后自动执行）")
+            except Exception as e:
+                logger.warning(f"后处理器初始化失败: {e}，将跳过后处理")
+                self.post_processor = None
         
         logger.info("报告生成器初始化完成")
     
@@ -119,9 +133,32 @@ class ReportGenerator:
         return stats
     
     def close(self):
-        """关闭报告生成器，释放资源"""
+        """关闭报告生成器，释放资源，并执行后处理"""
+        # 1. 关闭CSV写入器
         if hasattr(self, 'csv_writer') and self.csv_writer is not None:
             self.csv_writer.close()
+        
+        # 2. 执行后处理（v2.1新增）
+        if hasattr(self, 'post_processor') and self.post_processor is not None:
+            if self.post_processor.is_enabled():
+                try:
+                    # 确定输出基础目录
+                    output_base_dir = os.path.dirname(os.path.dirname(self.csv_path))
+                    
+                    # 执行后处理
+                    results = self.post_processor.process(
+                        csv_path=self.csv_path,
+                        output_base_dir=output_base_dir
+                    )
+                    
+                    if results.get('success'):
+                        logger.info("✓ 后处理任务全部完成")
+                    else:
+                        logger.warning("后处理未完全成功，请检查日志")
+                        
+                except Exception as e:
+                    logger.error(f"后处理执行失败: {e}", exc_info=True)
+        
         logger.info("报告生成器已关闭")
     
     def print_stats(self):

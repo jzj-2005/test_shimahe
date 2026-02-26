@@ -211,6 +211,35 @@ output:
   
   # 推送服务器地址
   push_server_url: "ws://localhost:8080/detections"
+  
+  # ========== v2.1新增：后处理配置 ==========
+  # 在检测停止后自动执行的后处理任务
+  # 注意：实时模式数据量可能很大，建议谨慎配置
+  
+  # GeoJSON导出（用于GIS软件）
+  export_geojson: false            # 实时模式默认关闭（数据量大）
+  geojson_dir: "./data/output/geojson/"
+  geojson_min_confidence: 0.0
+  geojson_high_confidence: 0.7
+  
+  # 智能去重（如果开启GeoJSON，强烈建议开启去重）
+  enable_deduplication: true       # 实时模式必须开启去重
+  deduplication:
+    distance_threshold: 5.0        # 距离阈值（米）
+    prefer_non_edge: true          # 优先保留画面中央的检测
+    prefer_high_confidence: true   # 优先保留高置信度检测
+    prefer_rtk: true               # 优先保留RTK定位的检测
+    min_quality_score: 0.4         # 实时模式建议设置更高的阈值
+    edge_penalty: 0.5
+  
+  # HTML地图生成
+  generate_map: false              # 实时模式默认关闭（数据量大，加载慢）
+  map_output_path: "./data/output/map.html"
+  auto_open_map: false
+  
+  # 统计摘要生成
+  generate_summary: true           # 建议开启，了解检测概况
+  summary_path: "./data/output/summary.txt"
 
 # 可视化配置
 visualization:

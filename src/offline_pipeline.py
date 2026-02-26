@@ -19,8 +19,8 @@ from .input.srt_parser import SRTParser
 from .input.osd_ocr_reader import OSDOCRReader
 
 from .detection.yolo_detector import YOLODetector
+from .detection.track_manager import TrackManager
 from .transform.camera_model import CameraModel
-from .transform.coord_transform import CoordinateTransformer
 from .output.report_generator import ReportGenerator
 
 
@@ -94,6 +94,9 @@ class OfflinePipeline:
         detection_config = self.yolo_config.get('detection', {})
         classes_config = self.yolo_config.get('classes', {})
         
+        tracking_config = self.yolo_config.get('tracking', {})
+        self.tracking_enabled = tracking_config.get('enabled', False)
+        
         self.detector = YOLODetector(
             model_path=model_config.get('path', './models/yolov11x.pt'),
             confidence_threshold=detection_config.get('confidence_threshold', 0.5),
@@ -102,14 +105,36 @@ class OfflinePipeline:
             half_precision=model_config.get('half_precision', False),
             imgsz=detection_config.get('imgsz', 640),
             class_names=classes_config.get('names', {}),
-            target_classes=classes_config.get('target_classes')
+            target_classes=classes_config.get('target_classes'),
+            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml')
         )
         
-        # 坐标转换器
-        self.camera_model = CameraModel(self.camera_config)
-        self.transformer = CoordinateTransformer(self.camera_model)
+        # 目标跟踪管理器（延迟保存策略）
+        self.track_manager = None
+        if self.tracking_enabled:
+            self.track_manager = TrackManager(tracking_config)
+            logger.info(">> Tracking dedup enabled (deferred save)")
         
-        # 报告生成器
+        # 坐标转换器（根据配置选择简化版或增强版）
+        self.camera_model = CameraModel(self.camera_config)
+        coord_config = self.camera_config.get('coordinate_transform', {})
+        
+        if coord_config.get('use_enhanced', False):
+            # 使用增强版转换器
+            from .transform.coord_transform_new import CoordinateTransformerEnhanced
+            quality_config = coord_config.get('quality_control', {})
+            self.transformer = CoordinateTransformerEnhanced(
+                camera_model=self.camera_model,
+                quality_config=quality_config
+            )
+            logger.info("✓ 使用增强版坐标转换器（3D姿态修正 + GPS质量控制）")
+        else:
+            # 使用简化版转换器
+            from .transform.coord_transform import CoordinateTransformer
+            self.transformer = CoordinateTransformer(self.camera_model)
+            logger.info("✓ 使用简化版坐标转换器（垂直投影）")
+        
+        # 报告生成器（v2.1新增：支持后处理）
         output_config = self.offline_config.get('output', {})
         self.report_gen = ReportGenerator(
             csv_path=output_config.get('csv_path', './data/output/csv/detections_offline.csv'),
@@ -117,7 +142,8 @@ class OfflinePipeline:
             save_images=output_config.get('save_images', True),
             image_format=output_config.get('image_format', 'full'),
             image_quality=output_config.get('image_quality', 90),
-            csv_write_mode='overwrite'
+            csv_write_mode='overwrite',
+            post_process_config=output_config  # 传递完整配置以启用后处理
         )
         
         # 可视化器
@@ -216,7 +242,15 @@ class OfflinePipeline:
         except Exception as e:
             logger.error(f"处理过程中发生错误: {e}", exc_info=True)
         finally:
-            # 关闭报告生成器（释放CSV文件句柄）
+            # 先刷写所有剩余跟踪目标到CSV
+            if hasattr(self, 'track_manager') and self.track_manager:
+                try:
+                    self.track_manager.flush_all(self.transformer, self.report_gen)
+                    self.track_manager.print_stats()
+                except Exception as e:
+                    logger.warning(f"刷写跟踪缓冲时出错: {e}")
+            
+            # 再关闭报告生成器（触发后处理）
             if hasattr(self, 'report_gen') and self.report_gen:
                 try:
                     self.report_gen.close()
@@ -281,24 +315,20 @@ class OfflinePipeline:
                     pbar.update(1)
                 continue
             
-            # YOLO检测
-            detections = self.detector.detect(frame)
-            
-            # 获取输出配置
-            output_config = self.offline_config.get('output', {})
-            save_only_with_detections = output_config.get('save_only_with_detections', False)
-            
-            # 只在有检测结果时进行后续处理
-            if detections:
-                # 坐标转换
-                detections = self.transformer.transform_detections(detections, pose)
-                
-                # 保存结果（CSV + 图片）
-                self.report_gen.save(detections, frame, pose, frame_number)
-            elif not save_only_with_detections:
-                # 如果配置为保存所有帧，即使无检测也可以记录
-                # （当前配置下会跳过）
-                pass
+            if self.tracking_enabled and self.track_manager:
+                # 跟踪模式：延迟保存，由 TrackManager 管理
+                detections = self.detector.detect_with_tracking(frame)
+                if detections:
+                    self.track_manager.update(detections, frame, pose, frame_number)
+                self.track_manager.flush_lost_tracks(
+                    frame_number, self.transformer, self.report_gen
+                )
+            else:
+                # 常规模式：每帧直接保存
+                detections = self.detector.detect(frame)
+                if detections:
+                    detections = self.transformer.transform_detections(detections, pose)
+                    self.report_gen.save(detections, frame, pose, frame_number)
             
             # 可视化
             if self.visualizer:
@@ -332,6 +362,8 @@ class OfflinePipeline:
         
         self.synchronizer.print_stats()
         self.detector.print_stats()
+        if self.track_manager:
+            self.track_manager.print_stats()
         self.report_gen.print_stats()
         
         logger.info("="*50)

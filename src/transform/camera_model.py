@@ -32,16 +32,16 @@ class CameraModel:
         
         # 图像分辨率
         resolution = camera.get('resolution', {})
-        self.image_width = resolution.get('width', 5472)
-        self.image_height = resolution.get('height', 3648)
+        self.image_width = resolution.get('width', 4032)  # 默认M4TD分辨率
+        self.image_height = resolution.get('height', 3024)
         
         # 传感器尺寸 (mm)
         sensor_size = camera.get('sensor_size', {})
-        self.sensor_width = sensor_size.get('width', 13.2)
-        self.sensor_height = sensor_size.get('height', 8.8)
+        self.sensor_width = sensor_size.get('width', 13.4)  # 默认1/1.3英寸传感器
+        self.sensor_height = sensor_size.get('height', 9.6)
         
         # 焦距 (mm)
-        self.focal_length = camera.get('focal_length', 8.8)
+        self.focal_length = camera.get('focal_length', 7.0)  # 默认M4TD焦距
         
         # 主点坐标 (像素)
         principal_point = camera.get('principal_point', {})
@@ -66,11 +66,46 @@ class CameraModel:
         self.meters_per_degree_lat = earth.get('meters_per_degree_lat', 110540)
         self.meters_per_degree_lon = earth.get('meters_per_degree_lon', 111320)
         
+        # 验证关键参数
+        self._validate_params()
+        
         logger.info(f"相机模型初始化完成: {self.model_name}")
         logger.info(f"分辨率: {self.image_width}x{self.image_height}")
         logger.info(f"传感器尺寸: {self.sensor_width}x{self.sensor_height}mm")
         logger.info(f"焦距: {self.focal_length}mm")
         logger.info(f"正射模式: 垂直假设={self.assume_vertical}, 姿态修正={self.use_attitude_correction}")
+    
+    def _validate_params(self):
+        """验证相机参数的合理性"""
+        issues = []
+        
+        # 检查分辨率
+        if self.image_width <= 0 or self.image_height <= 0:
+            issues.append(f"❌ 图像分辨率无效: {self.image_width}x{self.image_height}")
+        
+        # 检查传感器尺寸
+        if self.sensor_width <= 0 or self.sensor_height <= 0:
+            issues.append(f"❌ 传感器尺寸无效: {self.sensor_width}x{self.sensor_height}mm")
+        
+        # 检查焦距
+        if self.focal_length <= 0:
+            issues.append(f"❌ 焦距无效: {self.focal_length}mm")
+        
+        # 检查主点坐标是否在图像范围内
+        if not (0 <= self.cx <= self.image_width):
+            issues.append(f"⚠️ 主点X坐标超出图像范围: cx={self.cx}, width={self.image_width}")
+        
+        if not (0 <= self.cy <= self.image_height):
+            issues.append(f"⚠️ 主点Y坐标超出图像范围: cy={self.cy}, height={self.image_height}")
+        
+        # 输出验证结果
+        if issues:
+            logger.warning("相机参数验证发现问题:")
+            for issue in issues:
+                logger.warning(f"  {issue}")
+            logger.warning("请检查 config/camera_params.yaml 配置文件!")
+        else:
+            logger.info("✓ 相机参数验证通过")
     
     def calculate_gsd(self, altitude: float) -> Tuple[float, float]:
         """

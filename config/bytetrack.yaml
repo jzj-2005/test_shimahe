@@ -1,0 +1,21 @@
+# ByteTrack 跟踪器参数配置
+# 此文件为 Ultralytics 内置 bytetrack.yaml 的本地副本，方便自定义调参
+# 如需使用内置默认值，yolo_config.yaml 中设置 tracker: "bytetrack.yaml"
+# 如需使用本文件的自定义值，设置 tracker: "./config/bytetrack.yaml"
+
+tracker_type: bytetrack
+
+# 高置信度检测匹配阈值（高于此值的检测优先参与跟踪匹配）
+track_high_thresh: 0.5
+
+# 低置信度检测阈值（低于此值的检测不参与跟踪）
+track_low_thresh: 0.1
+
+# 新建跟踪的最低置信度（首次检测需超过此值才会创建新track_id）
+new_track_thresh: 0.6
+
+# 跟踪缓冲帧数（目标消失后在跟踪器内保持的最大帧数）
+track_buffer: 30
+
+# 匹配阈值（IoU匹配时的阈值，越大匹配越严格）
+match_thresh: 0.8

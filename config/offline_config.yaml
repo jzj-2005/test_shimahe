@@ -106,6 +106,34 @@ output:
   
   # HTML报告路径
   html_report_path: "./data/output/report.html"
+  
+  # ========== v2.1新增：后处理配置 ==========
+  # 在检测完成后自动执行的后处理任务
+  
+  # GeoJSON导出（用于GIS软件）
+  export_geojson: true
+  geojson_dir: "./data/output/geojson/"
+  geojson_min_confidence: 0.0      # 全部检测的最小置信度阈值
+  geojson_high_confidence: 0.7     # 高置信度检测的阈值
+  
+  # 智能去重（解决重复检测问题）
+  enable_deduplication: true       # 强烈推荐开启
+  deduplication:
+    distance_threshold: 5.0        # 距离阈值（米）：小于此距离视为同一目标
+    prefer_non_edge: true          # 优先保留画面中央的检测（目标更完整）
+    prefer_high_confidence: true   # 优先保留高置信度检测
+    prefer_rtk: true               # 优先保留RTK定位的检测（精度更高）
+    min_quality_score: 0.3         # 最低质量评分阈值（过滤低质量检测）
+    edge_penalty: 0.5              # 边缘检测惩罚系数（0.5表示评分减半）
+  
+  # HTML地图生成
+  generate_map: true
+  map_output_path: "./data/output/map.html"
+  auto_open_map: false             # 是否在浏览器中自动打开地图（true=自动打开）
+  
+  # 统计摘要生成
+  generate_summary: true
+  summary_path: "./data/output/summary.txt"
 
 # 可视化配置
 visualization:

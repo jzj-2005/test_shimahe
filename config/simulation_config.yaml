@@ -1,0 +1,107 @@
+# 模拟/测试模式配置
+# 用于在没有真实无人机的情况下验证实时管道
+#
+# 使用方法:
+#   方案一（Mock脚本，零依赖）:
+#     python test_realtime_simulation.py --video ./data/input/videos/DJI_0001.MP4
+#
+#   方案二（本地MQTT Broker）:
+#     1. 启动 Mosquitto: mosquitto -v
+#     2. 启动 Mock 发布者: python tools/mock_mqtt_publisher.py
+#     3. 将本文件复制为 realtime_config.yaml（或修改 main.py 指定）
+#     4. 启动实时管道: python src/main.py --mode realtime --config ./config
+
+mode: "realtime"
+
+# RTSP流配置 - 模拟模式
+# 如果没有 RTSP 源，可以用 FFmpeg 将本地视频转为 RTSP:
+#   ffmpeg -re -i input.mp4 -c copy -f rtsp rtsp://localhost:8554/live
+rtsp:
+  url: "rtsp://localhost:8554/live"
+  connection_timeout: 5
+  read_timeout: 5
+  reconnect_interval: 3
+  max_reconnect_attempts: 3
+  buffer_size: 30
+  transport_protocol: "tcp"
+
+# MQTT配置 - 指向本地 Mosquitto
+mqtt:
+  broker: "localhost"
+  port: 1883
+  username: ""
+  password: ""
+  client_id: "simulation_client_001"
+  topics:
+    aircraft_state: "thing/product/MOCK_DEVICE_SN/osd"
+  qos: 1
+  keep_alive: 60
+  connection_timeout: 5
+  reconnect_interval: 3
+  pose_buffer_size: 100
+
+# 数据同步配置
+data_sync:
+  max_time_diff: 1000
+  sync_strategy: "nearest"
+  skip_unmatched_frames: false
+  pose_cache_duration: 10
+
+# OCR备用 - 模拟模式下关闭
+ocr_fallback:
+  enabled: false
+
+# 实时处理配置
+realtime_processing:
+  target_fps: 0
+  frame_skip: 1
+  latency_requirement: 10.0
+  enable_multithreading: true
+  num_worker_threads: 4
+
+# 输出配置
+output:
+  csv_path: "./data/output/csv/detections_simulation.csv"
+  csv_write_mode: "overwrite"
+  save_images: true
+  image_dir: "./data/output/images_simulation/"
+  image_format: "full"
+  image_quality: 85
+  enable_realtime_push: false
+  export_geojson: false
+  enable_deduplication: false
+  generate_map: false
+  generate_summary: true
+  summary_path: "./data/output/simulation_summary.txt"
+
+# 可视化
+visualization:
+  realtime_display: true
+  display_width: 1280
+  display_height: 720
+  draw_boxes: true
+  show_labels: true
+  show_confidence: true
+  show_gps_info: true
+  show_performance_info: true
+  box_color: [0, 255, 0]
+  box_thickness: 2
+
+# 性能监控
+performance:
+  enable_monitoring: true
+  stats_interval: 5
+  log_frame_times: false
+
+# 日志 - 模拟模式用 DEBUG 级别便于排查
+logging:
+  level: "DEBUG"
+  save_to_file: true
+  log_file: "./data/output/simulation_log.txt"
+  verbose: true
+
+# 异常处理
+error_handling:
+  max_consecutive_failures: 5
+  save_error_frames: true
+  error_frame_dir: "./data/output/error_frames/"

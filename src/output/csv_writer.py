@@ -49,6 +49,7 @@ class CSVWriter:
             'timestamp',
             'frame_number',
             'datetime',
+            'track_id',
             'class_id',
             'class_name',
             'confidence',
@@ -67,7 +68,12 @@ class CSVWriter:
             'drone_lon',
             'is_on_edge',
             'edge_positions',
-            'image_path'
+            'image_path',
+            'gps_quality',
+            'positioning_state',
+            'estimated_error',
+            'gps_level',
+            'satellite_count'
         ]
         
         # 初始化文件
@@ -123,6 +129,7 @@ class CSVWriter:
                 'timestamp': pose.get('timestamp', 0),
                 'frame_number': frame_number,
                 'datetime': pose.get('datetime', datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]),
+                'track_id': detection.get('track_id', ''),
                 'class_id': detection.get('class_id', -1),
                 'class_name': detection.get('class_name', 'unknown'),
                 'confidence': detection.get('confidence', 0.0),
@@ -158,6 +165,22 @@ class CSVWriter:
             row['is_on_edge'] = detection.get('is_on_edge', False)
             edge_positions = detection.get('edge_positions', [])
             row['edge_positions'] = ','.join(edge_positions) if edge_positions else ''
+            
+            # 添加GPS质量信息（增强版转换器）
+            quality_info = detection.get('quality_info', {})
+            if quality_info:
+                row['gps_quality'] = quality_info.get('quality_level', '')
+                row['positioning_state'] = quality_info.get('positioning_state', '')
+                row['gps_level'] = quality_info.get('gps_level', 0)
+                row['satellite_count'] = quality_info.get('satellite_count', 0)
+            else:
+                row['gps_quality'] = ''
+                row['positioning_state'] = ''
+                row['gps_level'] = 0
+                row['satellite_count'] = 0
+            
+            # 添加误差估算（增强版转换器）
+            row['estimated_error'] = detection.get('estimated_error', 0.0)
             
             # 写入文件（使用持久化的文件句柄）
             if self._csv_writer is not None:
