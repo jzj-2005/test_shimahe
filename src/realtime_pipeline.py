@@ -1,10 +1,11 @@
 """
 实时处理流程
-处理RTSP视频流 + MQTT位姿数据
+处理RTSP视频流 + OSD位姿数据（支持HTTP / MQTT / 自动降级）
 """
 
 import time
 import threading
+from typing import Optional, Dict, Any
 from loguru import logger
 
 from .utils.config_loader import ConfigLoader
@@ -14,6 +15,7 @@ from .utils.visualizer import Visualizer
 
 from .input.rtsp_stream_reader import RTSPStreamReader
 from .input.mqtt_client import DJIMQTTClient
+from .input.http_osd_client import HttpOsdClient
 from .input.osd_ocr_reader import OSDOCRReader
 
 from .detection.yolo_detector import YOLODetector
@@ -67,19 +69,43 @@ class RealtimePipeline:
             transport_protocol=rtsp_config.get('transport_protocol', 'tcp')
         )
         
-        # MQTT客户端
-        mqtt_config = self.realtime_config.get('mqtt', {})
-        self.mqtt_client = DJIMQTTClient(
-            broker=mqtt_config.get('broker'),
-            port=mqtt_config.get('port', 1883),
-            username=mqtt_config.get('username', ''),
-            password=mqtt_config.get('password', ''),
-            client_id=mqtt_config.get('client_id', 'drone_inspection_client'),
-            topics=mqtt_config.get('topics', {}),
-            qos=mqtt_config.get('qos', 1),
-            keep_alive=mqtt_config.get('keep_alive', 60),
-            pose_buffer_size=mqtt_config.get('pose_buffer_size', 100)
-        )
+        # OSD数据源：根据 osd_source 配置初始化
+        self.osd_source = self.realtime_config.get('osd_source', 'auto')
+        self.http_client: Optional[HttpOsdClient] = None
+        self.mqtt_client: Optional[DJIMQTTClient] = None
+        self.active_pose_source: str = "none"
+        self._http_consecutive_failures: int = 0
+        self._http_max_failures: int = 30
+        
+        if self.osd_source in ('http', 'auto'):
+            http_config = self.realtime_config.get('http_osd', {})
+            self.http_client = HttpOsdClient(
+                base_url=http_config.get('base_url', ''),
+                api_path=http_config.get('api_path', '/satxspace-airspace/ai/getDrone'),
+                dev_sn=http_config.get('dev_sn', ''),
+                poll_interval=http_config.get('poll_interval', 0.1),
+                request_timeout=http_config.get('request_timeout', 2),
+                max_retry=http_config.get('max_retry', 3),
+                pose_buffer_size=http_config.get('pose_buffer_size', 100),
+            )
+            logger.info(f"HTTP OSD客户端已创建 (base_url={http_config.get('base_url')})")
+        
+        if self.osd_source in ('mqtt', 'auto'):
+            mqtt_config = self.realtime_config.get('mqtt', {})
+            self.mqtt_client = DJIMQTTClient(
+                broker=mqtt_config.get('broker'),
+                port=mqtt_config.get('port', 1883),
+                username=mqtt_config.get('username', ''),
+                password=mqtt_config.get('password', ''),
+                client_id=mqtt_config.get('client_id', 'drone_inspection_client'),
+                topics=mqtt_config.get('topics', {}),
+                qos=mqtt_config.get('qos', 1),
+                keep_alive=mqtt_config.get('keep_alive', 60),
+                pose_buffer_size=mqtt_config.get('pose_buffer_size', 100)
+            )
+            logger.info("MQTT客户端已创建")
+        
+        logger.info(f"OSD数据源模式: {self.osd_source}")
         
         # 数据同步器
         sync_config = self.realtime_config.get('data_sync', {})
@@ -104,7 +130,8 @@ class RealtimePipeline:
             half_precision=model_config.get('half_precision', False),
             class_names=classes_config.get('names', {}),
             target_classes=classes_config.get('target_classes'),
-            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml')
+            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml'),
+            obb_mode=model_config.get('obb_mode', False)
         )
         
         # 目标跟踪管理器（延迟保存策略）
@@ -179,15 +206,14 @@ class RealtimePipeline:
         logger.info("启动实时处理流程")
         
         try:
-            # 1. 连接MQTT服务器
-            logger.info("步骤1: 连接MQTT服务器")
-            if not self.mqtt_client.connect():
-                logger.error("MQTT连接失败，处理终止")
+            # 1. 连接OSD数据源
+            if not self._connect_osd_source():
+                logger.error("所有OSD数据源连接失败，处理终止")
                 return
             
-            # 启动MQTT数据接收线程
-            mqtt_thread = threading.Thread(target=self._mqtt_data_loop, daemon=True)
-            mqtt_thread.start()
+            # 启动OSD数据同步线程
+            osd_sync_thread = threading.Thread(target=self._osd_data_loop, daemon=True)
+            osd_sync_thread.start()
             
             # 2. 启动RTSP流读取
             logger.info("步骤2: 启动RTSP流读取")
@@ -208,17 +234,102 @@ class RealtimePipeline:
         finally:
             self._cleanup()
     
-    def _mqtt_data_loop(self):
-        """MQTT数据接收循环（后台线程）"""
+    def _connect_osd_source(self) -> bool:
+        """按osd_source策略连接数据源，返回是否成功"""
+        if self.osd_source == 'http':
+            logger.info("步骤1: 连接HTTP OSD接口")
+            if self.http_client and self.http_client.connect():
+                self.active_pose_source = "http"
+                logger.info("HTTP OSD接口连接成功 (主数据源)")
+                return True
+            logger.error("HTTP OSD接口连接失败")
+            return False
+        
+        if self.osd_source == 'mqtt':
+            logger.info("步骤1: 连接MQTT服务器")
+            if self.mqtt_client and self.mqtt_client.connect():
+                self.active_pose_source = "mqtt"
+                logger.info("MQTT连接成功 (主数据源)")
+                return True
+            logger.error("MQTT连接失败")
+            return False
+        
+        # auto模式：HTTP优先 → MQTT备选
+        logger.info("步骤1: 连接OSD数据源 (auto模式: HTTP优先)")
+        
+        if self.http_client and self.http_client.connect():
+            self.active_pose_source = "http"
+            logger.info("HTTP OSD接口连接成功 (主数据源)")
+            # auto模式下同时尝试连接MQTT作为备选
+            if self.mqtt_client:
+                try:
+                    if self.mqtt_client.connect(timeout=5):
+                        logger.info("MQTT备选连接成功")
+                    else:
+                        logger.warning("MQTT备选连接失败，仅使用HTTP")
+                except Exception as e:
+                    logger.warning(f"MQTT备选连接异常: {e}，仅使用HTTP")
+            return True
+        
+        logger.warning("HTTP OSD接口不可用，降级到MQTT")
+        if self.mqtt_client and self.mqtt_client.connect():
+            self.active_pose_source = "mqtt"
+            logger.info("MQTT连接成功 (降级数据源)")
+            return True
+        
+        logger.error("HTTP和MQTT均不可用")
+        return False
+    
+    def _osd_data_loop(self):
+        """OSD数据同步循环（后台线程），将位姿数据写入同步器"""
         while self.is_running:
-            # 获取位姿数据缓冲区
-            pose_buffer = self.mqtt_client.get_pose_buffer()
-            
-            # 添加到同步器
-            for pose in pose_buffer:
-                self.synchronizer.add_pose(pose)
-            
+            client = self.http_client if self.active_pose_source == "http" else self.mqtt_client
+            if client:
+                pose_buffer = client.get_pose_buffer()
+                for pose in pose_buffer:
+                    self.synchronizer.add_pose(pose)
             time.sleep(0.1)
+    
+    def _get_pose(self, frame=None, frame_count: int = 0, frame_timestamp: float = 0) -> tuple:
+        """统一位姿获取：HTTP优先 → MQTT备选 → OCR兜底
+        
+        Returns:
+            (pose, source) - pose为位姿字典或None，source为数据来源标识
+        """
+        # 1. 尝试主数据源
+        if self.active_pose_source == "http" and self.http_client:
+            pose = self.http_client.get_latest_pose()
+            if pose is not None:
+                self._http_consecutive_failures = 0
+                return pose, "http"
+            
+            self._http_consecutive_failures += 1
+            
+            # auto模式下：HTTP连续失败则尝试MQTT
+            if (self.osd_source == "auto"
+                    and self._http_consecutive_failures >= self._http_max_failures
+                    and self.mqtt_client):
+                if self.mqtt_client.is_connected:
+                    pose = self.mqtt_client.get_latest_pose()
+                    if pose is not None:
+                        if self._http_consecutive_failures == self._http_max_failures:
+                            logger.warning("HTTP OSD连续无数据，已自动切换到MQTT")
+                        return pose, "mqtt"
+        
+        elif self.active_pose_source == "mqtt" and self.mqtt_client:
+            pose = self.mqtt_client.get_latest_pose()
+            if pose is not None:
+                return pose, "mqtt"
+        
+        # 2. OCR兜底
+        if self.ocr_fallback_enabled and self.osd_reader and frame is not None:
+            pose = self.osd_reader.extract_pose_from_frame(
+                frame, frame_count, frame_timestamp
+            )
+            if pose is not None:
+                return pose, "ocr"
+        
+        return None, "none"
     
     def _process_loop(self):
         """实时处理循环"""
@@ -231,41 +342,28 @@ class RealtimePipeline:
         stats_interval = perf_config.get('stats_interval', 10)
         last_stats_time = time.time()
         
-        # OCR备用统计
-        ocr_fallback_count = 0
-        mqtt_success_count = 0
+        # 位姿来源统计
+        source_counts: Dict[str, int] = {"http": 0, "mqtt": 0, "ocr": 0}
         
         while self.is_running:
-            # 获取最新帧
             frame = self.stream_reader.get_frame()
             
             if frame is None:
                 time.sleep(0.01)
                 continue
             
-            frame_timestamp = time.time() * 1000  # 毫秒
+            frame_timestamp = time.time() * 1000
             
-            # 优先从MQTT获取位姿数据
-            pose = self.mqtt_client.get_latest_pose()
+            pose, source = self._get_pose(frame, frame_count, frame_timestamp)
             
             if pose is not None:
-                mqtt_success_count += 1
-            elif self.ocr_fallback_enabled and self.osd_reader:
-                # MQTT无数据，使用OCR备用
-                pose = self.osd_reader.extract_pose_from_frame(
-                    frame, frame_count, frame_timestamp
-                )
-                if pose:
-                    ocr_fallback_count += 1
-                    logger.debug(f"帧 {frame_count}: 使用OCR备用提取位姿")
-            
-            if pose is None:
-                logger.debug("暂无位姿数据（MQTT和OCR均失败）")
+                source_counts[source] = source_counts.get(source, 0) + 1
+            else:
+                logger.debug("暂无位姿数据（所有来源均失败）")
                 time.sleep(0.01)
                 continue
             
             if self.tracking_enabled and self.track_manager:
-                # 跟踪模式：延迟保存
                 detections = self.detector.detect_with_tracking(frame)
                 if detections:
                     self.track_manager.update(detections, frame, pose, frame_count)
@@ -273,16 +371,13 @@ class RealtimePipeline:
                     frame_count, self.transformer, self.report_gen
                 )
             else:
-                # 常规模式
                 detections = self.detector.detect(frame)
                 if detections:
                     detections = self.transformer.transform_detections(detections, pose)
                 if detections:
                     self.report_gen.save_realtime(detections, frame, pose, frame_count)
             
-            # 可视化
             if self.visualizer:
-                # 计算FPS
                 fps_frame_count += 1
                 if fps_frame_count % 10 == 0:
                     elapsed = time.time() - fps_start_time
@@ -290,41 +385,52 @@ class RealtimePipeline:
                 
                 key = self.visualizer.show(frame, detections, pose, frame_count, current_fps)
                 
-                # 按ESC退出
                 if key == 27:
                     logger.info("用户按下ESC键，退出处理")
                     break
             
             frame_count += 1
             
-            # 定期打印统计信息
             if time.time() - last_stats_time >= stats_interval:
-                self._print_realtime_stats(current_fps, mqtt_success_count, ocr_fallback_count, frame_count)
+                self._print_realtime_stats(current_fps, source_counts, frame_count)
                 last_stats_time = time.time()
         
         logger.info(f"共处理 {frame_count} 帧")
-        if self.ocr_fallback_enabled:
-            logger.info(f"MQTT提供位姿: {mqtt_success_count} 帧, OCR备用: {ocr_fallback_count} 帧")
+        logger.info(f"位姿来源统计: HTTP {source_counts.get('http', 0)} 帧, "
+                    f"MQTT {source_counts.get('mqtt', 0)} 帧, "
+                    f"OCR {source_counts.get('ocr', 0)} 帧")
     
-    def _print_realtime_stats(self, fps: float, mqtt_count: int = 0, ocr_count: int = 0, total_frames: int = 0):
+    def _print_realtime_stats(self, fps: float, source_counts: Dict[str, int] = None, total_frames: int = 0):
         """打印实时统计信息"""
         logger.info("--- 实时统计 ---")
-        logger.info(f"处理速度: {fps:.2f} FPS")
+        logger.info(f"处理速度: {fps:.2f} FPS | 主数据源: {self.active_pose_source}")
         
-        if self.ocr_fallback_enabled and total_frames > 0:
-            mqtt_pct = (mqtt_count / total_frames * 100) if total_frames > 0 else 0
-            ocr_pct = (ocr_count / total_frames * 100) if total_frames > 0 else 0
-            logger.info(f"位姿来源: MQTT {mqtt_pct:.1f}%, OCR {ocr_pct:.1f}%")
+        if source_counts and total_frames > 0:
+            parts = []
+            for src in ("http", "mqtt", "ocr"):
+                cnt = source_counts.get(src, 0)
+                if cnt > 0:
+                    pct = cnt / total_frames * 100
+                    parts.append(f"{src.upper()} {pct:.1f}%")
+            if parts:
+                logger.info(f"位姿来源: {', '.join(parts)}")
         
         stream_stats = self.stream_reader.get_stats()
         logger.info(f"视频流: 已接收{stream_stats['total_frames']}帧, "
                    f"缓冲区{stream_stats['buffer_size']}, "
                    f"重连{stream_stats['reconnect_count']}次")
         
-        mqtt_stats = self.mqtt_client.get_stats()
-        logger.info(f"MQTT: 已接收{mqtt_stats['message_count']}条消息, "
-                   f"缓冲区{mqtt_stats['buffer_size']}, "
-                   f"有位姿数据: {mqtt_stats['has_pose_data']}")
+        if self.http_client:
+            http_stats = self.http_client.get_stats()
+            logger.info(f"HTTP OSD: 成功{http_stats['message_count']}次, "
+                       f"错误{http_stats['error_count']}次, "
+                       f"延迟{http_stats['last_latency_ms']}ms")
+        
+        if self.mqtt_client:
+            mqtt_stats = self.mqtt_client.get_stats()
+            logger.info(f"MQTT: 已接收{mqtt_stats['message_count']}条消息, "
+                       f"缓冲区{mqtt_stats['buffer_size']}, "
+                       f"有位姿数据: {mqtt_stats['has_pose_data']}")
     
     def _cleanup(self):
         """清理资源"""
@@ -335,6 +441,10 @@ class RealtimePipeline:
         # 停止RTSP流
         if self.stream_reader:
             self.stream_reader.stop()
+        
+        # 断开HTTP OSD
+        if self.http_client:
+            self.http_client.disconnect()
         
         # 断开MQTT
         if self.mqtt_client:

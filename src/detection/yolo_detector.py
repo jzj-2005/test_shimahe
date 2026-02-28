@@ -22,7 +22,8 @@ class YOLODetector:
         imgsz: int = 640,
         class_names: Dict[int, str] = None,
         target_classes: List[int] = None,
-        tracker_type: str = "bytetrack.yaml"
+        tracker_type: str = "bytetrack.yaml",
+        obb_mode: bool = False
     ):
         """
         初始化YOLO检测器
@@ -37,6 +38,7 @@ class YOLODetector:
             class_names: 类别名称映射
             target_classes: 目标类别列表（如果为None则检测所有类别）
             tracker_type: 跟踪器类型 ("bytetrack.yaml" 或 "botsort.yaml")
+            obb_mode: 是否启用 OBB 旋转框模式
         """
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
@@ -47,6 +49,7 @@ class YOLODetector:
         self.class_names = class_names or {}
         self.target_classes = target_classes
         self.tracker_type = tracker_type
+        self.obb_mode = obb_mode
         
         # 加载模型
         self.model = None
@@ -77,7 +80,8 @@ class YOLODetector:
             # 设置设备
             self.model.to(self.device)
             
-            logger.info(f"YOLO模型加载成功，设备: {self.device}")
+            mode_str = "OBB旋转框" if self.obb_mode else "HBB水平框"
+            logger.info(f"YOLO模型加载成功，设备: {self.device}，模式: {mode_str}")
             
             # 打印模型信息
             if hasattr(self.model, 'names'):
@@ -142,53 +146,16 @@ class YOLODetector:
             img_height, img_width = image.shape[:2]
             
             for result in results:
-                boxes = result.boxes
-                
-                if boxes is None or len(boxes) == 0:
-                    continue
-                
-                # 获取检测框信息
-                xyxy = boxes.xyxy.cpu().numpy()  # 边界框坐标
-                confs = boxes.conf.cpu().numpy()  # 置信度
-                classes = boxes.cls.cpu().numpy().astype(int)  # 类别ID
-                
-                for box_xyxy, conf, cls in zip(xyxy, confs, classes):
-                    # 如果指定了目标类别，只保留目标类别
-                    if self.target_classes is not None and cls not in self.target_classes:
-                        continue
-                    
-                    # 构建检测结果
-                    x1, y1, x2, y2 = box_xyxy
-                    detection = {
-                        'class_id': int(cls),
-                        'class_name': self.class_names.get(cls, f"class_{cls}"),
-                        'confidence': float(conf),
-                    }
-                    
-                    # 根据返回类型添加坐标
-                    if return_type == "corners":
-                        # 转换为四角点坐标
-                        detection['corners'] = [
-                            (float(x1), float(y1)),  # 左上
-                            (float(x2), float(y1)),  # 右上
-                            (float(x2), float(y2)),  # 右下
-                            (float(x1), float(y2))   # 左下
-                        ]
-                    else:
-                        # 保留xyxy格式
-                        detection['xyxy'] = box_xyxy.tolist()
-                    
-                    # 边缘检测标记
-                    if check_edge:
-                        edge_info = self._check_box_on_edge(
-                            x1, y1, x2, y2,
-                            img_width, img_height,
-                            edge_threshold
-                        )
-                        detection['is_on_edge'] = edge_info['is_on_edge']
-                        detection['edge_positions'] = edge_info['positions']
-                    
-                    detections.append(detection)
+                if self.obb_mode and result.obb is not None:
+                    detections += self._parse_obb_result(
+                        result, img_width, img_height,
+                        return_type, check_edge, edge_threshold
+                    )
+                else:
+                    detections += self._parse_hbb_result(
+                        result, img_width, img_height,
+                        return_type, check_edge, edge_threshold
+                    )
                 
                 self.total_detections += len(detections)
             
@@ -271,55 +238,20 @@ class YOLODetector:
             img_height, img_width = image.shape[:2]
             
             for result in results:
-                boxes = result.boxes
-                if boxes is None or len(boxes) == 0:
-                    continue
-                
-                xyxy = boxes.xyxy.cpu().numpy()
-                confs = boxes.conf.cpu().numpy()
-                classes = boxes.cls.cpu().numpy().astype(int)
-                
-                track_ids = None
-                if boxes.id is not None:
-                    track_ids = boxes.id.cpu().numpy().astype(int)
-                
-                for idx, (box_xyxy, conf, cls) in enumerate(zip(xyxy, confs, classes)):
-                    if self.target_classes is not None and cls not in self.target_classes:
-                        continue
-                    
-                    tid = int(track_ids[idx]) if track_ids is not None else None
-                    if tid is None:
-                        continue
-                    
-                    x1, y1, x2, y2 = box_xyxy
-                    detection = {
-                        'class_id': int(cls),
-                        'class_name': self.class_names.get(cls, f"class_{cls}"),
-                        'confidence': float(conf),
-                        'track_id': tid,
-                    }
-                    
-                    if return_type == "corners":
-                        detection['corners'] = [
-                            (float(x1), float(y1)),
-                            (float(x2), float(y1)),
-                            (float(x2), float(y2)),
-                            (float(x1), float(y2))
-                        ]
-                    else:
-                        detection['xyxy'] = box_xyxy.tolist()
-                    
-                    edge_info = self._check_box_on_edge(
-                        x1, y1, x2, y2,
-                        img_width, img_height,
-                        edge_threshold
+                if self.obb_mode and result.obb is not None:
+                    parsed = self._parse_obb_result(
+                        result, img_width, img_height,
+                        return_type, True, edge_threshold,
+                        with_tracking=True
                     )
-                    detection['is_on_edge'] = edge_info['is_on_edge']
-                    detection['edge_positions'] = edge_info['positions']
-                    
-                    detections.append(detection)
-                
-                self.total_detections += len(detections)
+                else:
+                    parsed = self._parse_hbb_result(
+                        result, img_width, img_height,
+                        return_type, True, edge_threshold,
+                        with_tracking=True
+                    )
+                detections += parsed
+                self.total_detections += len(parsed)
             
             logger.debug(f"[Tracking] detected {len(detections)} targets with track_ids")
             return detections
@@ -334,6 +266,138 @@ class YOLODetector:
             self.model.predictor = None
             logger.info("Tracker state reset")
     
+    def _parse_hbb_result(
+        self,
+        result,
+        img_width: int,
+        img_height: int,
+        return_type: str = "corners",
+        check_edge: bool = False,
+        edge_threshold: int = 50,
+        with_tracking: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """解析 HBB（水平框）检测结果"""
+        detections = []
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            return detections
+
+        xyxy = boxes.xyxy.cpu().numpy()
+        confs = boxes.conf.cpu().numpy()
+        classes = boxes.cls.cpu().numpy().astype(int)
+
+        track_ids = None
+        if with_tracking and boxes.id is not None:
+            track_ids = boxes.id.cpu().numpy().astype(int)
+
+        for idx, (box_xyxy, conf, cls) in enumerate(zip(xyxy, confs, classes)):
+            if self.target_classes is not None and cls not in self.target_classes:
+                continue
+
+            if with_tracking:
+                tid = int(track_ids[idx]) if track_ids is not None else None
+                if tid is None:
+                    continue
+
+            x1, y1, x2, y2 = box_xyxy
+            detection = {
+                'class_id': int(cls),
+                'class_name': self.class_names.get(cls, f"class_{cls}"),
+                'confidence': float(conf),
+            }
+
+            if with_tracking:
+                detection['track_id'] = tid
+
+            if return_type == "corners":
+                detection['corners'] = [
+                    (float(x1), float(y1)),
+                    (float(x2), float(y1)),
+                    (float(x2), float(y2)),
+                    (float(x1), float(y2))
+                ]
+            else:
+                detection['xyxy'] = box_xyxy.tolist()
+
+            if check_edge:
+                edge_info = self._check_box_on_edge(
+                    x1, y1, x2, y2,
+                    img_width, img_height,
+                    edge_threshold
+                )
+                detection['is_on_edge'] = edge_info['is_on_edge']
+                detection['edge_positions'] = edge_info['positions']
+
+            detections.append(detection)
+
+        return detections
+
+    def _parse_obb_result(
+        self,
+        result,
+        img_width: int,
+        img_height: int,
+        return_type: str = "corners",
+        check_edge: bool = False,
+        edge_threshold: int = 50,
+        with_tracking: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """解析 OBB（旋转框）检测结果，从 result.obb 提取四角点"""
+        detections = []
+        obbs = result.obb
+        if obbs is None or len(obbs) == 0:
+            return detections
+
+        xyxyxyxy = obbs.xyxyxyxy.cpu().numpy()   # shape: (N, 4, 2)
+        confs = obbs.conf.cpu().numpy()
+        classes = obbs.cls.cpu().numpy().astype(int)
+
+        track_ids = None
+        if with_tracking and obbs.id is not None:
+            track_ids = obbs.id.cpu().numpy().astype(int)
+
+        for idx, (corners_raw, conf, cls) in enumerate(zip(xyxyxyxy, confs, classes)):
+            if self.target_classes is not None and cls not in self.target_classes:
+                continue
+
+            if with_tracking:
+                tid = int(track_ids[idx]) if track_ids is not None else None
+                if tid is None:
+                    continue
+
+            corners = [(float(corners_raw[i][0]), float(corners_raw[i][1])) for i in range(4)]
+
+            detection = {
+                'class_id': int(cls),
+                'class_name': self.class_names.get(cls, f"class_{cls}"),
+                'confidence': float(conf),
+            }
+
+            if with_tracking:
+                detection['track_id'] = tid
+
+            if return_type == "corners":
+                detection['corners'] = corners
+            else:
+                xs = [c[0] for c in corners]
+                ys = [c[1] for c in corners]
+                detection['xyxy'] = [min(xs), min(ys), max(xs), max(ys)]
+
+            if check_edge:
+                xs = [c[0] for c in corners]
+                ys = [c[1] for c in corners]
+                edge_info = self._check_box_on_edge(
+                    min(xs), min(ys), max(xs), max(ys),
+                    img_width, img_height,
+                    edge_threshold
+                )
+                detection['is_on_edge'] = edge_info['is_on_edge']
+                detection['edge_positions'] = edge_info['positions']
+
+            detections.append(detection)
+
+        return detections
+
     def _check_box_on_edge(
         self,
         x1: float, y1: float, x2: float, y2: float,

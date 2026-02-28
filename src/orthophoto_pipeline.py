@@ -80,7 +80,8 @@ class OrthophotoPipeline:
             half_precision=model_config.get('half_precision', False),
             imgsz=detection_config.get('imgsz', 640),
             class_names=classes_config.get('names', {}),
-            target_classes=classes_config.get('target_classes')
+            target_classes=classes_config.get('target_classes'),
+            obb_mode=model_config.get('obb_mode', False)
         )
         
         # 坐标转换器

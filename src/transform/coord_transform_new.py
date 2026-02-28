@@ -92,6 +92,9 @@ class CoordinateTransformerEnhanced:
         """
         评估GPS数据质量
         
+        当数据来自HTTP接口时，gps_level和positioning_state可能缺失，
+        此时基于可用字段（satellite_count等）给出保守评估，避免误拒。
+        
         Args:
             pose: 位姿数据字典
             
@@ -104,9 +107,9 @@ class CoordinateTransformerEnhanced:
         if not self.enable_quality_control:
             return 'MEDIUM', False, 5.0
         
-        gps_level = pose.get('gps_level', 0)
+        gps_level = pose.get('gps_level')
         sat_count = pose.get('satellite_count', 0)
-        positioning_state = pose.get('positioning_state', 'GPS')
+        positioning_state = pose.get('positioning_state')
         
         # RTK固定解 - 最高质量（厘米级精度）
         if positioning_state == 'RTK_FIXED':
@@ -123,18 +126,34 @@ class CoordinateTransformerEnhanced:
             logger.debug("检测到差分GPS，GPS精度: 1-3米级")
             return 'HIGH', False, 2.0
         
-        # 普通GPS - 根据信号强度评估
-        if gps_level < self.min_gps_level or sat_count < self.min_satellite_count:
-            logger.warning(f"GPS信号弱: level={gps_level}, sats={sat_count}")
-            if self.skip_on_low_quality:
-                return 'INVALID', True, 10.0
+        # --- 缺失字段适配（HTTP数据源） ---
+        # gps_level 或 positioning_state 缺失时，仅基于卫星数评估，不做拒绝
+        has_gps_level = gps_level is not None
+        
+        if has_gps_level:
+            gps_level = int(gps_level)
+            if gps_level < self.min_gps_level or sat_count < self.min_satellite_count:
+                logger.warning(f"GPS信号弱: level={gps_level}, sats={sat_count}")
+                if self.skip_on_low_quality:
+                    return 'INVALID', True, 10.0
+                return 'LOW', False, 8.0
+            
+            if gps_level >= 5 and sat_count >= 15:
+                return 'HIGH', False, 3.0
+            
+            return 'MEDIUM', False, 5.0
+        
+        # gps_level缺失：仅凭卫星数做保守评估，不拒绝数据
+        if sat_count >= 15:
+            return 'HIGH', False, 3.0
+        if sat_count >= self.min_satellite_count:
+            return 'MEDIUM', False, 5.0
+        if sat_count > 0:
+            logger.warning(f"卫星数偏少: {sat_count} (gps_level不可用，跳过信号强度检查)")
             return 'LOW', False, 8.0
         
-        # 优秀的普通GPS
-        if gps_level >= 5 and sat_count >= 15:
-            return 'HIGH', False, 3.0
-        
-        # 合格的普通GPS
+        # 卫星数也为0：给MEDIUM而非INVALID，避免HTTP模式下全部被拒
+        logger.warning("GPS质量字段均缺失，按MEDIUM处理（不跳过）")
         return 'MEDIUM', False, 5.0
     
     def _build_rotation_matrix_numpy(self, yaw: float, pitch: float, roll: float) -> np.ndarray:
@@ -218,12 +237,15 @@ class CoordinateTransformerEnhanced:
         Returns:
             归一化射线方向数组 (N, 3)
         """
+        # 焦距从 mm 转换为像素单位: f_px = f_mm * image_width / sensor_width
+        f_px = self.camera.focal_length * self.camera.image_width / self.camera.sensor_width
+        
         rays = []
         
         for u, v in pixel_coords:
             # 归一化像素坐标（相对于主点）
-            x_norm = (u - self.camera.cx) / self.camera.focal_length
-            y_norm = (v - self.camera.cy) / self.camera.focal_length
+            x_norm = (u - self.camera.cx) / f_px
+            y_norm = (v - self.camera.cy) / f_px
             
             # 相机坐标系下的射线方向
             # 注意：Z=1表示沿光轴向前

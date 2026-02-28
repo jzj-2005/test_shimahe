@@ -142,17 +142,19 @@ class ImageSaver:
         confidence = detection.get('confidence', 0)
         label = f"{class_name} {confidence:.2f}"
         
-        # 计算标签位置
-        x1, y1 = int(corners[0][0]), int(corners[0][1])
+        # 取旋转框最上方的角点作为标签锚点（兼容 OBB 和 HBB）
+        top_corner = min(corners, key=lambda c: c[1])
+        label_x, label_y = int(top_corner[0]), int(top_corner[1])
         
         # 绘制标签背景
         (text_width, text_height), baseline = cv2.getTextSize(
             label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
         )
+        bg_y1 = max(0, label_y - text_height - baseline - 5)
         cv2.rectangle(
             img,
-            (x1, y1 - text_height - baseline - 5),
-            (x1 + text_width, y1),
+            (label_x, bg_y1),
+            (label_x + text_width, label_y),
             (0, 255, 0),
             -1
         )
@@ -161,7 +163,7 @@ class ImageSaver:
         cv2.putText(
             img,
             label,
-            (x1, y1 - baseline - 2),
+            (label_x, max(text_height, label_y - baseline - 2)),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (255, 255, 255),

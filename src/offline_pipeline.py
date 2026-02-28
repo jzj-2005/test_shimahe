@@ -106,7 +106,8 @@ class OfflinePipeline:
             imgsz=detection_config.get('imgsz', 640),
             class_names=classes_config.get('names', {}),
             target_classes=classes_config.get('target_classes'),
-            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml')
+            tracker_type=tracking_config.get('tracker', 'bytetrack.yaml'),
+            obb_mode=model_config.get('obb_mode', False)
         )
         
         # 目标跟踪管理器（延迟保存策略）

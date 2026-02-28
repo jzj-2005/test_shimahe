@@ -5,6 +5,37 @@
 
 mode: "realtime"
 
+# ========== OSD数据源选择 ==========
+# "http"  - 通过HTTP接口获取（开发部MQTT桥接服务）
+# "mqtt"  - 直连DJI Cloud API MQTT
+# "auto"  - HTTP优先，HTTP不可用时自动降级到MQTT
+osd_source: "auto"
+
+# ========== HTTP OSD接口配置 ==========
+# 开发部将DJI MQTT OSD数据桥接为HTTP接口
+# 接口文档: https://s.apifox.cn/241bc285-9a83-43cd-9f71-e927407134ec
+http_osd:
+  # 服务根地址
+  base_url: "http://10.5.52.129:10006"
+
+  # 接口路径
+  api_path: "/satxspace-airspace/ai/getDrone"
+
+  # 设备序列号（与MQTT中的设备SN相同）
+  dev_sn: "1581F8HGX25B500A11XF"
+
+  # 轮询间隔（秒）。0.1 = 10Hz，与MQTT OSD推送频率匹配
+  poll_interval: 0.1
+
+  # 单次HTTP请求超时（秒）
+  request_timeout: 2
+
+  # 连续失败达到此次数后标记为不可用（auto模式下触发降级到MQTT）
+  max_retry: 3
+
+  # 位姿数据缓冲区大小
+  pose_buffer_size: 100
+
 # RTSP流配置
 rtsp:
   # RTSP流地址

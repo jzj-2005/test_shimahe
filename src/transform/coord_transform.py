@@ -122,6 +122,12 @@ class CoordinateTransformer:
         # 计算地面分辨率
         gsd_x, gsd_y = self.camera.calculate_gsd(altitude)
         
+        # 航向角：用于将图像坐标系偏移旋转到东-北坐标系
+        # DJI yaw: 0=正北, 顺时针为正
+        yaw_rad = radians(pose.get('yaw', 0))
+        cos_yaw = cos(yaw_rad)
+        sin_yaw = sin(yaw_rad)
+        
         # 转换每个像素点为WGS84坐标
         geo_coords_wgs84 = []
         
@@ -131,17 +137,19 @@ class CoordinateTransformer:
             delta_v = v - self.camera.cy
             
             # 转换为地面距离 (米)
-            # 注意: 图像y轴向下为正，纬度向北为正，所以需要取负
-            dx = delta_u * gsd_x
-            dy = -delta_v * gsd_y  # 取负号
+            # 图像坐标系: X=右, Y=下（相对于图像顶部）
+            dx_img = delta_u * gsd_x
+            dy_img = -delta_v * gsd_y  # 取负号：图像Y向下 → 机体前方向上
+            
+            # 应用 yaw 旋转：图像坐标系 → 东-北坐标系 (ENU)
+            # 当 yaw=0（朝北）时，图像X=东, 图像Y=北（无旋转）
+            # 当 yaw=θ 时，需要旋转 θ 角
+            east  =  dx_img * cos_yaw + dy_img * sin_yaw
+            north = -dx_img * sin_yaw + dy_img * cos_yaw
             
             # 转换为经纬度偏移
-            # 纬度: dy / 每度纬度对应的米数
-            delta_lat = dy / self.camera.meters_per_degree_lat
-            
-            # 经度: dx / (每度经度对应的米数 × cos(纬度))
-            # 因为经度间距随纬度变化
-            delta_lon = dx / (self.camera.meters_per_degree_lon * cos(radians(drone_lat)))
+            delta_lat = north / self.camera.meters_per_degree_lat
+            delta_lon = east / (self.camera.meters_per_degree_lon * cos(radians(drone_lat)))
             
             # 计算目标WGS84地理坐标
             target_lat = drone_lat + delta_lat

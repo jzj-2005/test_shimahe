@@ -12,11 +12,16 @@ model:
   
   # 是否使用半精度推理 (需要GPU支持，速度翻倍)
   half_precision: true
+  
+  # 是否启用 OBB 旋转框模式
+  # true  → 从 result.obb 解析旋转四角点（需要 OBB 训练模型）
+  # false → 使用传统 HBB 水平框（默认，兼容现有模型）
+  obb_mode: false
 
 # 检测参数
 detection:
   # 置信度阈值（河岸四乱检测：提高阈值减少误检）
-  confidence_threshold: 0.35
+  confidence_threshold: 0.5
   
   # IoU阈值 (用于NMS)
   iou_threshold: 0.45
@@ -110,7 +115,8 @@ tracking:
   min_track_frames: 3
   
   # 是否裁剪缓冲帧（true=只缓存目标区域，节省90%内存; false=缓存完整帧）
-  crop_buffer: true
+  # 注意: 如果 image_format 为 "full"（保存完整帧带标注），必须设为 false
+  crop_buffer: false
 
 # 批处理设置
 batch:
