@@ -64,6 +64,7 @@ class CSVWriter:
             'center_lat',
             'center_lon',
             'altitude',
+            'relative_height',
             'drone_lat',
             'drone_lon',
             'is_on_edge',
@@ -86,8 +87,10 @@ class CSVWriter:
     
     def _init_file(self):
         """初始化CSV文件"""
-        # 如果是覆盖模式或文件不存在，写入表头
-        if self.write_mode == "overwrite" or not os.path.exists(self.output_path):
+        # 如果是覆盖模式、文件不存在或文件为空，写入表头
+        if (self.write_mode == "overwrite"
+                or not os.path.exists(self.output_path)
+                or os.path.getsize(self.output_path) == 0):
             try:
                 with open(self.output_path, 'w', newline='', encoding='utf-8') as f:
                     writer = csv.DictWriter(f, fieldnames=self.fieldnames)
@@ -134,6 +137,7 @@ class CSVWriter:
                 'class_name': detection.get('class_name', 'unknown'),
                 'confidence': detection.get('confidence', 0.0),
                 'altitude': pose.get('altitude', 0.0),
+                'relative_height': pose.get('relative_height', 0.0),
                 'drone_lat': pose.get('latitude', 0.0),
                 'drone_lon': pose.get('longitude', 0.0),
                 'image_path': image_path

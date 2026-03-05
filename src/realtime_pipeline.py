@@ -3,8 +3,11 @@
 处理RTSP视频流 + OSD位姿数据（支持HTTP / MQTT / 自动降级）
 """
 
+import os
 import time
+import signal
 import threading
+from datetime import datetime
 from typing import Optional, Dict, Any
 from loguru import logger
 
@@ -42,6 +45,12 @@ class RealtimePipeline:
         self.yolo_config = self.config_loader.load('yolo_config')
         self.camera_config = self.config_loader.load('camera_params')
         
+        # 生成本次运行的时间戳输出目录
+        run_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.run_output_dir = os.path.join("./data/output/realtime_runs", run_timestamp)
+        os.makedirs(self.run_output_dir, exist_ok=True)
+        self._override_output_paths(self.run_output_dir)
+        
         # 初始化日志
         log_config = self.realtime_config.get('logging', {})
         setup_logger(
@@ -57,6 +66,19 @@ class RealtimePipeline:
         
         logger.info("实时处理流程初始化完成")
     
+    def _override_output_paths(self, run_output_dir: str):
+        """将所有输出路径重定向到本次运行的时间戳目录"""
+        output_config = self.realtime_config.setdefault('output', {})
+        output_config['csv_path'] = os.path.join(run_output_dir, 'csv', 'detections_realtime.csv')
+        output_config['image_dir'] = os.path.join(run_output_dir, 'images')
+        output_config['geojson_dir'] = os.path.join(run_output_dir, 'geojson')
+        output_config['map_output_path'] = os.path.join(run_output_dir, 'map.html')
+        output_config['summary_path'] = os.path.join(run_output_dir, 'summary.txt')
+
+        log_config = self.realtime_config.setdefault('logging', {})
+        if log_config.get('save_to_file'):
+            log_config['log_file'] = os.path.join(run_output_dir, 'realtime_log.txt')
+
     def _init_components(self):
         """初始化各个组件"""
         # RTSP流读取器
@@ -179,7 +201,8 @@ class RealtimePipeline:
                 display_width=viz_config.get('display_width', 1280),
                 display_height=viz_config.get('display_height', 720),
                 box_color=tuple(viz_config.get('box_color', [0, 255, 0])),
-                box_thickness=viz_config.get('box_thickness', 2)
+                box_thickness=viz_config.get('box_thickness', 2),
+                font_size=viz_config.get('font_size', None)
             )
         
         # OCR备用读取器
@@ -291,12 +314,19 @@ class RealtimePipeline:
             time.sleep(0.1)
     
     def _get_pose(self, frame=None, frame_count: int = 0, frame_timestamp: float = 0) -> tuple:
-        """统一位姿获取：HTTP优先 → MQTT备选 → OCR兜底
+        """统一位姿获取：优先从同步器插值 → HTTP/MQTT最新值 → OCR兜底
         
         Returns:
             (pose, source) - pose为位姿字典或None，source为数据来源标识
         """
-        # 1. 尝试主数据源
+        # 1. 优先使用同步器插值（HTTP/MQTT数据通过后台线程持续写入同步器）
+        if frame_timestamp > 0 and len(self.synchronizer.pose_buffer) >= 2:
+            pose = self.synchronizer.sync_frame_interpolated(frame_timestamp)
+            if pose is not None:
+                self._http_consecutive_failures = 0
+                return pose, self.active_pose_source + "_interp"
+
+        # 2. 插值失败时回退到取最新值
         if self.active_pose_source == "http" and self.http_client:
             pose = self.http_client.get_latest_pose()
             if pose is not None:
@@ -305,7 +335,6 @@ class RealtimePipeline:
             
             self._http_consecutive_failures += 1
             
-            # auto模式下：HTTP连续失败则尝试MQTT
             if (self.osd_source == "auto"
                     and self._http_consecutive_failures >= self._http_max_failures
                     and self.mqtt_client):
@@ -321,7 +350,7 @@ class RealtimePipeline:
             if pose is not None:
                 return pose, "mqtt"
         
-        # 2. OCR兜底
+        # 3. OCR兜底
         if self.ocr_fallback_enabled and self.osd_reader and frame is not None:
             pose = self.osd_reader.extract_pose_from_frame(
                 frame, frame_count, frame_timestamp
@@ -343,7 +372,7 @@ class RealtimePipeline:
         last_stats_time = time.time()
         
         # 位姿来源统计
-        source_counts: Dict[str, int] = {"http": 0, "mqtt": 0, "ocr": 0}
+        source_counts: Dict[str, int] = {"http": 0, "http_interp": 0, "mqtt": 0, "mqtt_interp": 0, "ocr": 0}
         
         while self.is_running:
             frame = self.stream_reader.get_frame()
@@ -433,52 +462,58 @@ class RealtimePipeline:
                        f"有位姿数据: {mqtt_stats['has_pose_data']}")
     
     def _cleanup(self):
-        """清理资源"""
-        logger.info("正在清理资源...")
+        """清理资源（屏蔽SIGINT，防止清理过程被二次中断）"""
+        original_handler = signal.getsignal(signal.SIGINT)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         
-        self.is_running = False
-        
-        # 停止RTSP流
-        if self.stream_reader:
-            self.stream_reader.stop()
-        
-        # 断开HTTP OSD
-        if self.http_client:
-            self.http_client.disconnect()
-        
-        # 断开MQTT
-        if self.mqtt_client:
-            self.mqtt_client.disconnect()
-        
-        # 关闭可视化
-        if self.visualizer:
-            self.visualizer.close()
-        
-        # 刷写所有剩余跟踪目标
-        if hasattr(self, 'track_manager') and self.track_manager:
-            try:
-                self.track_manager.flush_all(self.transformer, self.report_gen)
-                self.track_manager.print_stats()
-            except Exception as e:
-                logger.warning(f"刷写跟踪缓冲时出错: {e}")
-        
-        # 打印最终统计
-        logger.info("\n" + "="*50)
-        logger.info("最终统计信息")
-        logger.info("="*50)
-        
-        self.detector.print_stats()
-        self.report_gen.print_stats()
-        
-        # 关闭报告生成器并触发后处理（v2.1新增）
-        if self.report_gen:
-            try:
-                self.report_gen.close()
-            except Exception as e:
-                logger.warning(f"关闭报告生成器时出错: {e}")
-        
-        logger.info("="*50)
-        logger.info("实时处理流程已结束")
+        try:
+            logger.info("正在清理资源...")
+            
+            self.is_running = False
+            
+            # 停止RTSP流
+            if self.stream_reader:
+                self.stream_reader.stop()
+            
+            # 断开HTTP OSD
+            if self.http_client:
+                self.http_client.disconnect()
+            
+            # 断开MQTT
+            if self.mqtt_client:
+                self.mqtt_client.disconnect()
+            
+            # 关闭可视化
+            if self.visualizer:
+                self.visualizer.close()
+            
+            # 刷写所有剩余跟踪目标
+            if hasattr(self, 'track_manager') and self.track_manager:
+                try:
+                    self.track_manager.flush_all(self.transformer, self.report_gen)
+                    self.track_manager.print_stats()
+                except Exception as e:
+                    logger.warning(f"刷写跟踪缓冲时出错: {e}")
+            
+            # 打印最终统计
+            logger.info("\n" + "="*50)
+            logger.info("最终统计信息")
+            logger.info("="*50)
+            
+            self.detector.print_stats()
+            self.report_gen.print_stats()
+            
+            # 关闭报告生成器并触发后处理（v2.1新增）
+            if self.report_gen:
+                try:
+                    self.report_gen.close()
+                except Exception as e:
+                    logger.warning(f"关闭报告生成器时出错: {e}")
+            
+            logger.info("="*50)
+            logger.info("实时处理流程已结束")
+        finally:
+            signal.signal(signal.SIGINT, original_handler)
     
     def stop(self):
         """停止处理"""

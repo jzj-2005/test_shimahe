@@ -111,3 +111,53 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# from ultralytics import YOLO
+
+# model = YOLO("yolo11x-obb.pt")
+
+# results = model.train(
+#     # ========== 必填 ==========
+#     data="data/dataset.yaml",     # 数据集配置文件路径
+#     epochs=150,                   # 训练轮数
+#     imgsz=1280,                   # 输入尺寸，航拍建议 1280
+#     batch=8,                      # 批大小（24GB显存→8, 11GB→4, 8GB→2）
+#     device=0,                     # GPU编号，多卡用 device="0,1"
+
+#     # ========== 优化器 ==========
+#     optimizer="SGD",              # 优化器，也可用 "Adam" / "AdamW"
+#     lr0=0.01,                     # 初始学习率
+#     lrf=0.01,                     # 最终学习率 = lr0 × lrf
+#     momentum=0.937,               # SGD 动量
+#     weight_decay=0.0005,          # 权重衰减
+
+#     # ========== 学习率预热 ==========
+#     warmup_epochs=3.0,
+#     warmup_momentum=0.8,
+#     warmup_bias_lr=0.1,
+
+#     # ========== 数据增强（OBB 关键）==========
+#     degrees=180.0,                # 旋转范围，OBB 必须设大！
+#     translate=0.1,                # 平移
+#     scale=0.5,                    # 缩放
+#     flipud=0.5,                   # 上下翻转
+#     fliplr=0.5,                   # 左右翻转
+#     mosaic=1.0,                   # Mosaic 增强
+#     mixup=0.1,                    # MixUp 增强
+
+#     # ========== 早停与保存 ==========
+#     patience=30,                  # 验证指标30轮没提升就停
+#     save=True,
+#     save_period=-1,               # -1 = 只保存 best.pt 和 last.pt
+
+#     # ========== 输出目录 ==========
+#     project="runs/obb",           # 输出根目录
+#     name="train",                 # 子目录名
+#     exist_ok=False,               # False→自动加序号 train2, train3...
+
+#     # ========== 其他 ==========
+#     workers=8,                    # 数据加载线程
+#     seed=0,
+#     verbose=True,
+#     plots=True,                   # 自动生成训练曲线和混淆矩阵
+# )

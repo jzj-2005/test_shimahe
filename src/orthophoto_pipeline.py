@@ -107,7 +107,8 @@ class OrthophotoPipeline:
                 display_width=viz_config.get('display_width', 1280),
                 display_height=viz_config.get('display_height', 720),
                 box_color=tuple(viz_config.get('box_color', [0, 255, 0])),
-                box_thickness=viz_config.get('box_thickness', 2)
+                box_thickness=viz_config.get('box_thickness', 2),
+                font_size=viz_config.get('font_size', None)
             )
     
     def run(self, image_dir: Optional[str] = None, mrk_file: Optional[str] = None):

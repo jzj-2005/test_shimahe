@@ -1,6 +1,6 @@
 """
 图像保存模块
-保存检测目标的截图
+保存检测目标的截图（支持中文标签渲染）
 """
 
 import os
@@ -9,6 +9,8 @@ import numpy as np
 from typing import Dict, Any, Optional
 from datetime import datetime
 from loguru import logger
+from PIL import Image, ImageDraw
+from ..utils.visualizer import get_pil_font
 
 
 class ImageSaver:
@@ -115,61 +117,40 @@ class ImageSaver:
     
     def _draw_detection(self, image: np.ndarray, detection: Dict[str, Any]) -> np.ndarray:
         """
-        在完整图像上绘制检测框
-        
-        Args:
-            image: 原始图像
-            detection: 检测结果
-            
-        Returns:
-            绘制后的图像
+        在完整图像上绘制检测框（使用 PIL 渲染文本以支持中文标签）
         """
         img = image.copy()
+        h, w = img.shape[:2]
         
-        # 获取检测框
         corners = detection.get('corners', [])
         if len(corners) < 4:
             return img
         
-        # 转换为整数坐标
         pts = np.array([[int(x), int(y)] for x, y in corners], dtype=np.int32)
-        
-        # 绘制矩形框
         cv2.polylines(img, [pts], isClosed=True, color=(0, 255, 0), thickness=2)
         
-        # 绘制标签
         class_name = detection.get('class_name', 'unknown')
         confidence = detection.get('confidence', 0)
         label = f"{class_name} {confidence:.2f}"
         
-        # 取旋转框最上方的角点作为标签锚点（兼容 OBB 和 HBB）
+        font_size = max(round(max(h, w) / 150), 10)
         top_corner = min(corners, key=lambda c: c[1])
         label_x, label_y = int(top_corner[0]), int(top_corner[1])
         
-        # 绘制标签背景
-        (text_width, text_height), baseline = cv2.getTextSize(
-            label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2
-        )
-        bg_y1 = max(0, label_y - text_height - baseline - 5)
-        cv2.rectangle(
-            img,
-            (label_x, bg_y1),
-            (label_x + text_width, label_y),
-            (0, 255, 0),
-            -1
-        )
+        pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+        draw = ImageDraw.Draw(pil_img)
+        font = get_pil_font(font_size)
+        pad = max(font_size // 6, 2)
         
-        # 绘制标签文本
-        cv2.putText(
-            img,
-            label,
-            (label_x, max(text_height, label_y - baseline - 2)),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2
+        text_y = max(0, label_y - font_size - pad * 2)
+        bbox = draw.textbbox((label_x, text_y), label, font=font)
+        draw.rectangle(
+            [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad],
+            fill=(0, 128, 0)
         )
+        draw.text((label_x, text_y), label, font=font, fill=(255, 255, 255))
         
+        img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         return img
     
     def save_batch(

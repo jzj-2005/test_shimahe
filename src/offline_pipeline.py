@@ -155,7 +155,8 @@ class OfflinePipeline:
                 display_width=viz_config.get('display_width', 1280),
                 display_height=viz_config.get('display_height', 720),
                 box_color=tuple(viz_config.get('box_color', [0, 255, 0])),
-                box_thickness=viz_config.get('box_thickness', 2)
+                box_thickness=viz_config.get('box_thickness', 2),
+                font_size=viz_config.get('font_size', None)
             )
     
     def run(self, video_path: Optional[str] = None):
@@ -312,28 +313,24 @@ class OfflinePipeline:
                     logger.debug(f"帧 {frame_number} OCR未能提取位姿数据")
                 else:
                     logger.warning(f"帧 {frame_number} 未找到匹配的位姿数据")
-                if pbar:
-                    pbar.update(1)
-                continue
             
+            # 检测：无论是否有位姿，都运行检测（保证可视化和跟踪连续性）
+            detections = []
             if self.tracking_enabled and self.track_manager:
-                # 跟踪模式：延迟保存，由 TrackManager 管理
                 detections = self.detector.detect_with_tracking(frame)
-                if detections:
+                if detections and pose is not None:
                     self.track_manager.update(detections, frame, pose, frame_number)
                 self.track_manager.flush_lost_tracks(
                     frame_number, self.transformer, self.report_gen
                 )
             else:
-                # 常规模式：每帧直接保存
                 detections = self.detector.detect(frame)
-                if detections:
+                if detections and pose is not None:
                     detections = self.transformer.transform_detections(detections, pose)
                     self.report_gen.save(detections, frame, pose, frame_number)
             
-            # 可视化
+            # 可视化：始终显示画面
             if self.visualizer:
-                # 计算FPS
                 fps_frame_count += 1
                 if fps_frame_count % 10 == 0:
                     elapsed = time.time() - fps_start_time
@@ -341,7 +338,6 @@ class OfflinePipeline:
                 
                 key = self.visualizer.show(frame, detections, pose, frame_number, current_fps)
                 
-                # 按ESC退出
                 if key == 27:
                     logger.info("用户按下ESC键，退出处理")
                     break

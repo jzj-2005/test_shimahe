@@ -114,7 +114,8 @@ class CoordinateTransformer:
         # 提取位姿信息（来自无人机GPS，为WGS84坐标）
         drone_lat = pose.get('latitude', 0)
         drone_lon = pose.get('longitude', 0)
-        altitude = pose.get('altitude', 0)
+        # 优先使用对地高度(AGL)，回退到海拔高度(MSL)
+        altitude = pose.get('relative_height', 0) or pose.get('altitude', 0)
         
         if altitude == 0:
             logger.warning("飞行高度为0，坐标转换可能不准确")

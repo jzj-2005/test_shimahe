@@ -175,27 +175,51 @@ class OSDOCRReader:
             识别到的文本行列表
         """
         try:
-            # PaddleOCR识别 - 新版API
             result = self.ocr.ocr(image_roi)
             
-            if not result or not result[0]:
+            if not result:
                 return []
             
-            # 提取文本
             text_lines = []
-            for line in result[0]:
-                if line and len(line) >= 2:
-                    text = line[1][0]  # 文本内容
-                    confidence = line[1][1]  # 置信度
-                    
-                    # 过滤低置信度结果
-                    if confidence > 0.5:
+
+            # PaddleOCR 3.x (PaddleX) 返回 dict 列表格式
+            if isinstance(result, list) and result and isinstance(result[0], dict):
+                rec_texts = result[0].get('rec_text', [])
+                rec_scores = result[0].get('rec_score', [])
+                for text, score in zip(rec_texts, rec_scores):
+                    if score > 0.5 and text:
                         text_lines.append(text)
+                return text_lines
+
+            # PaddleOCR 2.x 格式: [[line, line, ...]] where line = [box, (text, conf)]
+            page = result[0]
+            if not page:
+                return []
+
+            for line in page:
+                try:
+                    if not line:
+                        continue
+                    # dict 格式 (部分 3.x 版本)
+                    if isinstance(line, dict):
+                        text = line.get('text', '') or line.get('rec_text', '')
+                        score = line.get('score', 0) or line.get('rec_score', 0)
+                        if score > 0.5 and text:
+                            text_lines.append(text)
+                        continue
+                    # 标准 2.x tuple 格式: [box, (text, confidence)]
+                    if len(line) >= 2 and isinstance(line[1], (list, tuple)) and len(line[1]) >= 2:
+                        text, confidence = line[1][0], line[1][1]
+                        if confidence > 0.5 and text:
+                            text_lines.append(text)
+                except (IndexError, KeyError, TypeError):
+                    continue
             
             return text_lines
             
         except Exception as e:
             logger.error(f"OCR识别失败: {e}")
+            logger.debug(f"OCR原始返回类型: {type(result).__name__}, 内容概览: {str(result)[:300]}")
             return []
     
     def _parse_osd_text(self, text_lines: List[str]) -> Optional[Dict[str, Any]]:

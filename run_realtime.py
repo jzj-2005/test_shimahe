@@ -2,6 +2,9 @@
 实时模式快捷启动脚本
 """
 
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+
 from src.realtime_pipeline import RealtimePipeline
 
 
@@ -15,6 +18,8 @@ def main():
     
     # 创建并运行实时处理流程
     pipeline = RealtimePipeline(config_dir='./config')
+    print(f"本次输出目录: {os.path.abspath(pipeline.run_output_dir)}")
+    print("="*60)
     pipeline.run()
     
     print("\n处理完成!")

@@ -163,71 +163,192 @@ class DataSynchronizer:
         logger.warning(f"未找到匹配的位姿数据，帧号: {frame_number}")
         return None
     
+    @staticmethod
+    def _lerp_angle(a1: float, a2: float, ratio: float) -> float:
+        """最短弧角度插值，正确处理 ±180° 边界"""
+        diff = (a2 - a1 + 180) % 360 - 180
+        return a1 + ratio * diff
+
+    def _interpolate_field(
+        self,
+        before: Dict[str, Any],
+        after: Dict[str, Any],
+        key: str,
+        ratio: float,
+        is_angle: bool = False,
+        default: Any = None
+    ) -> Any:
+        """插值单个字段，缺失时取最近值或默认值"""
+        v1 = before.get(key)
+        v2 = after.get(key)
+        if v1 is None and v2 is None:
+            return default
+        if v1 is None:
+            return v2
+        if v2 is None:
+            return v1
+        if is_angle:
+            return self._lerp_angle(v1, v2, ratio)
+        return v1 + ratio * (v2 - v1)
+
+    def sync_frame_interpolated(
+        self,
+        frame_timestamp: float
+    ) -> Optional[Dict[str, Any]]:
+        """
+        基于缓冲区的线性插值同步：找到帧时间戳前后的两条 OSD 数据做插值。
+        如果缓冲区不足两条或时间差超限，回退到最近邻匹配。
+
+        Args:
+            frame_timestamp: 帧时间戳（毫秒）
+
+        Returns:
+            插值后的位姿数据，或 None
+        """
+        self.stats['total_frames'] += 1
+
+        if len(self.pose_buffer) == 0:
+            self.stats['unmatched_frames'] += 1
+            return None
+
+        # 只有 1 条数据时直接返回
+        if len(self.pose_buffer) == 1:
+            only = self.pose_buffer[0]
+            if abs(only['timestamp'] - frame_timestamp) <= self.max_time_diff:
+                self.stats['matched_frames'] += 1
+                return dict(only)
+            self.stats['unmatched_frames'] += 1
+            return None
+
+        # 在缓冲区中找前后两条（缓冲区按 add_pose 顺序，时间基本递增）
+        before_pose = None
+        after_pose = None
+        for pose in self.pose_buffer:
+            if pose['timestamp'] <= frame_timestamp:
+                before_pose = pose
+            else:
+                after_pose = pose
+                break
+
+        # 边界情况：帧时间在所有数据之前或之后，回退到最近邻
+        if before_pose is None:
+            nearest = self.pose_buffer[0]
+        elif after_pose is None:
+            nearest = self.pose_buffer[-1]
+        else:
+            nearest = None
+
+        if nearest is not None:
+            if abs(nearest['timestamp'] - frame_timestamp) <= self.max_time_diff:
+                self.stats['matched_frames'] += 1
+                return dict(nearest)
+            self.stats['unmatched_frames'] += 1
+            return None
+
+        # 时间差超限检查
+        if (frame_timestamp - before_pose['timestamp'] > self.max_time_diff or
+                after_pose['timestamp'] - frame_timestamp > self.max_time_diff):
+            self.stats['unmatched_frames'] += 1
+            return None
+
+        # 插值比例
+        t1 = before_pose['timestamp']
+        t2 = after_pose['timestamp']
+        ratio = (frame_timestamp - t1) / (t2 - t1) if t2 != t1 else 0.0
+
+        # 需要线性插值的标量字段
+        linear_fields = [
+            'latitude', 'longitude', 'altitude',
+            'relative_height', 'ground_speed', 'velocity_z',
+        ]
+        # 需要最短弧插值的角度字段
+        angle_fields = [
+            'yaw', 'pitch', 'roll',
+            'gimbal_pitch', 'gimbal_yaw', 'gimbal_roll',
+        ]
+        # 不插值、直接取最近值的离散字段
+        nearest_fields = [
+            'satellite_count', 'gps_level', 'positioning_state',
+            'battery_percent',
+        ]
+
+        result = {'timestamp': frame_timestamp}
+
+        for key in linear_fields:
+            val = self._interpolate_field(before_pose, after_pose, key, ratio)
+            if val is not None:
+                result[key] = val
+
+        for key in angle_fields:
+            val = self._interpolate_field(before_pose, after_pose, key, ratio, is_angle=True)
+            if val is not None:
+                result[key] = val
+
+        for key in nearest_fields:
+            closer = before_pose if ratio <= 0.5 else after_pose
+            val = closer.get(key)
+            if val is not None:
+                result[key] = val
+
+        # 保留 before_pose 中存在但未被插值覆盖的其他字段
+        for key in before_pose:
+            if key not in result:
+                result[key] = before_pose[key]
+
+        self.stats['matched_frames'] += 1
+        time_diff = min(frame_timestamp - t1, t2 - frame_timestamp)
+        self.stats['avg_time_diff'] = (
+            (self.stats['avg_time_diff'] * (self.stats['matched_frames'] - 1) + time_diff)
+            / self.stats['matched_frames']
+        )
+
+        logger.debug(f"插值位姿: ratio={ratio:.3f}, 前={t1:.0f}ms 后={t2:.0f}ms 帧={frame_timestamp:.0f}ms")
+        return result
+
     def interpolate_pose(
         self,
         frame_timestamp: float,
         poses: List[Dict[str, Any]]
     ) -> Optional[Dict[str, Any]]:
         """
-        线性插值位姿数据 (高级功能)
-        
-        Args:
-            frame_timestamp: 帧时间戳
-            poses: 位姿数据列表 (至少需要2个)
-            
-        Returns:
-            插值后的位姿数据
+        从给定列表插值位姿数据（保留向后兼容，离线管线可用）
         """
         if len(poses) < 2:
-            logger.warning("插值需要至少2个位姿数据点")
-            return None
-        
-        # 排序位姿数据
+            return poses[0] if poses else None
+
         sorted_poses = sorted(poses, key=lambda x: x['timestamp'])
-        
-        # 查找前后两个位姿
+
         before_pose = None
         after_pose = None
-        
-        for i, pose in enumerate(sorted_poses):
+        for pose in sorted_poses:
             if pose['timestamp'] <= frame_timestamp:
                 before_pose = pose
-            if pose['timestamp'] >= frame_timestamp and after_pose is None:
+            elif after_pose is None:
                 after_pose = pose
                 break
-        
-        # 如果找不到前后位姿，返回最近的
+
         if before_pose is None:
-            return sorted_poses[0]
+            return dict(sorted_poses[0])
         if after_pose is None:
-            return sorted_poses[-1]
-        
-        # 线性插值
+            return dict(sorted_poses[-1])
+
         t1 = before_pose['timestamp']
         t2 = after_pose['timestamp']
-        t = frame_timestamp
-        
-        # 插值比例
-        ratio = (t - t1) / (t2 - t1) if t2 != t1 else 0
-        
-        # 创建插值后的位姿数据
-        interpolated_pose = {
-            'timestamp': frame_timestamp,
-            'latitude': before_pose['latitude'] + ratio * (after_pose['latitude'] - before_pose['latitude']),
-            'longitude': before_pose['longitude'] + ratio * (after_pose['longitude'] - before_pose['longitude']),
-            'altitude': before_pose['altitude'] + ratio * (after_pose['altitude'] - before_pose['altitude']),
-        }
-        
-        # 如果有姿态角，也进行插值
-        if 'yaw' in before_pose and 'yaw' in after_pose:
-            interpolated_pose['yaw'] = before_pose['yaw'] + ratio * (after_pose['yaw'] - before_pose['yaw'])
-        if 'pitch' in before_pose and 'pitch' in after_pose:
-            interpolated_pose['pitch'] = before_pose['pitch'] + ratio * (after_pose['pitch'] - before_pose['pitch'])
-        if 'roll' in before_pose and 'roll' in after_pose:
-            interpolated_pose['roll'] = before_pose['roll'] + ratio * (after_pose['roll'] - before_pose['roll'])
-        
-        logger.debug(f"插值位姿数据，时间: {frame_timestamp}, 比例: {ratio:.3f}")
-        return interpolated_pose
+        ratio = (frame_timestamp - t1) / (t2 - t1) if t2 != t1 else 0.0
+
+        result = {'timestamp': frame_timestamp}
+        all_keys = set(before_pose.keys()) | set(after_pose.keys())
+        angle_keys = {'yaw', 'pitch', 'roll', 'gimbal_pitch', 'gimbal_yaw', 'gimbal_roll'}
+
+        for key in all_keys:
+            if key == 'timestamp':
+                continue
+            is_angle = key in angle_keys
+            val = self._interpolate_field(before_pose, after_pose, key, ratio, is_angle=is_angle)
+            if val is not None:
+                result[key] = val
+
+        return result
     
     def clear_buffer(self):
         """清空位姿缓冲区"""

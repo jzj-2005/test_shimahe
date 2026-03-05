@@ -16,7 +16,7 @@ osd_source: "auto"
 # 接口文档: https://s.apifox.cn/241bc285-9a83-43cd-9f71-e927407134ec
 http_osd:
   # 服务根地址
-  base_url: "http://10.5.52.129:10006"
+  base_url: "http://uavi-smh.satxspace-dg.cn/"
 
   # 接口路径
   api_path: "/satxspace-airspace/ai/getDrone"
@@ -39,7 +39,7 @@ http_osd:
 # RTSP流配置
 rtsp:
   # RTSP流地址
-  url: "rtsp://192.168.1.100:8554/live"
+  url: "rtsp://113.105.137.153:554/live/1581F8HGX25B500A11XF?callId=26-173"
   
   # 连接超时 (秒)
   connection_timeout: 10
@@ -179,7 +179,7 @@ data_sync:
 # 当MQTT位姿数据不可用时使用OCR识别视频画面
 ocr_fallback:
   # 是否启用OCR备用功能
-  enabled: true
+  enabled: false
   
   # OCR引擎配置
   engine: "paddleocr"
@@ -218,6 +218,8 @@ realtime_processing:
   num_worker_threads: 4
 
 # 输出配置
+# 注意：实际运行时，以下路径会被自动重定向到 data/output/realtime_runs/<启动时间戳>/ 目录下
+# 此处的值仅作为文档参考，不影响实际输出位置
 output:
   # CSV输出路径
   csv_path: "./data/output/csv/detections_realtime.csv"
@@ -229,7 +231,7 @@ output:
   save_images: true
   
   # 截图保存路径
-  image_dir: "./data/output/images/"
+  image_dir: "./data/output/realtime/realtime_images/"
   
   # 截图格式: "crop" (只保存目标区域) 或 "full" (保存整帧带标注)
   image_format: "full"
@@ -248,7 +250,7 @@ output:
   # 注意：实时模式数据量可能很大，建议谨慎配置
   
   # GeoJSON导出（用于GIS软件）
-  export_geojson: false            # 实时模式默认关闭（数据量大）
+  export_geojson: true            # 实时模式默认关闭（数据量大）
   geojson_dir: "./data/output/geojson/"
   geojson_min_confidence: 0.0
   geojson_high_confidence: 0.7
@@ -264,7 +266,7 @@ output:
     edge_penalty: 0.5
   
   # HTML地图生成
-  generate_map: false              # 实时模式默认关闭（数据量大，加载慢）
+  generate_map: true              # 实时模式默认关闭（数据量大，加载慢）
   map_output_path: "./data/output/map.html"
   auto_open_map: false
   
@@ -301,6 +303,10 @@ visualization:
   
   # 线条粗细
   box_thickness: 2
+  
+  # 标签字体大小（像素），留空则根据图像尺寸自动计算
+  # 建议值：4K图像 20~30，1080p图像 12~18
+  # font_size: 20
 
 # 性能监控配置
 performance:

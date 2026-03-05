@@ -258,49 +258,63 @@ class CoordinateTransformerEnhanced:
         
         return np.array(rays)
     
-    def _camera_to_body(self, rays_camera: np.ndarray) -> np.ndarray:
+    def _camera_to_world(
+        self,
+        rays_camera: np.ndarray,
+        heading: float,
+        gimbal_pitch: float
+    ) -> np.ndarray:
         """
-        将相机坐标系转换为机体坐标系
+        将相机坐标系射线直接转换为世界坐标系（ENU）
         
-        相机坐标系 -> 机体坐标系的转换
-        假设: 相机光轴沿机体Z轴向下（云台垂直向下）
+        使用实际云台俯仰角，不内置 -90 度假设。
+        
+        旋转链: R = Rz(-heading) @ R_base @ Rx(gimbal_pitch)
+        
+        - Rx(gimbal_pitch): 云台俯仰（0=前方水平, -90=正下方）
+        - R_base: 相机坐标系到 ENU 的基础映射
+                   （heading=0, gimbalPitch=0 时: cam_X=East, cam_Z=North, -cam_Y=Up）
+        - Rz(-heading): 航向旋转（取负: DJI顺时针 → 数学逆时针）
         
         Args:
             rays_camera: 相机坐标系射线 (N, 3)
-            
-        Returns:
-            机体坐标系射线 (N, 3)
-        """
-        # 云台垂直向下时的转换矩阵
-        # 相机X(右) -> 机体Y(右)
-        # 相机Y(下) -> 机体X(前)
-        # 相机Z(前) -> 机体-Z(下)
-        R_cam_to_body = np.array([
-            [0, 1, 0],   # 机体X = 相机Y
-            [1, 0, 0],   # 机体Y = 相机X
-            [0, 0, -1]   # 机体Z = -相机Z
-        ])
-        
-        rays_body = rays_camera @ R_cam_to_body.T
-        
-        return rays_body
-    
-    def _body_to_world(self, rays_body: np.ndarray, R: np.ndarray) -> np.ndarray:
-        """
-        将机体坐标系转换为世界坐标系（ENU）
-        
-        机体坐标系 -> 世界坐标系的转换
-        使用姿态旋转矩阵
-        
-        Args:
-            rays_body: 机体坐标系射线 (N, 3)
-            R: 姿态旋转矩阵 (3, 3)
+            heading: 总航向角（度），= aircraft_yaw + gimbalYaw
+            gimbal_pitch: 云台俯仰角（度），-90=正下方
             
         Returns:
             世界坐标系射线 (N, 3)
         """
-        # 应用旋转矩阵
-        rays_world = rays_body @ R.T
+        gp_rad = radians(gimbal_pitch)
+        hd_rad = radians(-heading)
+        
+        # Rx(gimbal_pitch): 绕相机X轴（右侧）俯仰
+        Rx = np.array([
+            [1, 0,           0          ],
+            [0, cos(gp_rad), -sin(gp_rad)],
+            [0, sin(gp_rad),  cos(gp_rad)]
+        ])
+        
+        # R_base: 相机坐标系 → ENU（heading=0, gimbalPitch=0 时的对应关系）
+        #   cam_X(右)  → ENU_X(East)
+        #   cam_Z(前)  → ENU_Y(North)
+        #  -cam_Y(上)  → ENU_Z(Up)
+        R_base = np.array([
+            [1,  0, 0],
+            [0,  0, 1],
+            [0, -1, 0]
+        ])
+        
+        # Rz(-heading): 绕ENU的Z轴旋转航向
+        Rz = np.array([
+            [cos(hd_rad), -sin(hd_rad), 0],
+            [sin(hd_rad),  cos(hd_rad), 0],
+            [0,            0,           1]
+        ])
+        
+        # 组合: camera → pitched → ENU_body → world
+        R_total = Rz @ R_base @ Rx
+        
+        rays_world = rays_camera @ R_total.T
         
         return rays_world
     
@@ -438,11 +452,10 @@ class CoordinateTransformerEnhanced:
         流程:
         1. GPS质量评估
         2. 像素 -> 相机射线
-        3. 相机坐标系 -> 机体坐标系
-        4. 机体坐标系 -> 世界坐标系（应用姿态旋转）
-        5. 射线-地面相交
-        6. 偏移 -> WGS84坐标
-        7. WGS84 -> CGCS2000坐标
+        3. 相机射线 -> 世界坐标系（使用实际云台角度 + 航向）
+        4. 射线-地面相交
+        5. 偏移 -> WGS84坐标
+        6. WGS84 -> CGCS2000坐标
         
         Args:
             pixel_coords: 像素坐标列表
@@ -471,35 +484,38 @@ class CoordinateTransformerEnhanced:
         # 提取位姿信息
         drone_lat = pose.get('latitude', 0)
         drone_lon = pose.get('longitude', 0)
-        altitude = pose.get('altitude', 0)
-        yaw = pose.get('yaw', 0)
-        pitch = pose.get('pitch', -90)
-        roll = pose.get('roll', 0)
+        
+        # 优先使用对地高度(AGL)，回退到海拔高度(MSL)
+        altitude = pose.get('relative_height', 0) or pose.get('altitude', 0)
+        
+        # 航向 = 飞机yaw + 云台yaw（云台yaw通常为0）
+        aircraft_yaw = pose.get('yaw', 0)
+        gimbal_yaw = pose.get('gimbal_yaw', 0)
+        heading = aircraft_yaw + gimbal_yaw
+        
+        # 使用实际云台俯仰角（不假设 -90°）
+        gimbal_pitch = pose.get('gimbal_pitch', pose.get('pitch', -90))
         
         if altitude == 0:
             logger.warning("飞行高度为0，坐标转换可能不准确")
         
         logger.debug(f"[3D转换] GPS({drone_lat:.6f}, {drone_lon:.6f}), "
-                    f"高度{altitude:.1f}m, "
-                    f"姿态(yaw={yaw:.1f}°, pitch={pitch:.1f}°, roll={roll:.1f}°)")
+                    f"高度{altitude:.1f}m(AGL), "
+                    f"航向{heading:.1f}°, 云台俯仰{gimbal_pitch:.1f}°")
         
         # 2. 像素 -> 相机射线
         rays_camera = self._pixel_to_camera_ray(pixel_coords)
         
-        # 3. 相机坐标系 -> 机体坐标系
-        rays_body = self._camera_to_body(rays_camera)
+        # 3. 相机射线 -> 世界坐标系（一步完成，使用实际云台角度）
+        rays_world = self._camera_to_world(rays_camera, heading, gimbal_pitch)
         
-        # 4. 构建姿态旋转矩阵并转换到世界坐标系
-        R = self._build_rotation_matrix(yaw, pitch, roll)
-        rays_world = self._body_to_world(rays_body, R)
-        
-        # 5. 射线-地面相交
+        # 4. 射线-地面相交
         ground_offsets = self._ray_ground_intersection(rays_world, altitude)
         
-        # 6. 偏移 -> WGS84坐标
+        # 5. 偏移 -> WGS84坐标
         coords_wgs84 = self._offset_to_latlon(ground_offsets, drone_lat, drone_lon)
         
-        # 7. WGS84 -> CGCS2000
+        # 6. WGS84 -> CGCS2000
         coords_cgcs2000 = self.convert_wgs84_to_cgcs2000(coords_wgs84)
         
         logger.debug(f"[3D转换] 成功转换 {len(coords_cgcs2000)} 个坐标点")
@@ -525,7 +541,7 @@ class CoordinateTransformerEnhanced:
         _, _, gps_error = self.evaluate_gps_quality(pose)
         
         # 高度误差影响（假设高度误差1%）
-        altitude = pose.get('altitude', 100)
+        altitude = pose.get('relative_height', 0) or pose.get('altitude', 100)
         altitude_error = altitude * 0.01  # 1%高度误差
         
         # 姿态角误差影响（假设姿态角误差±1°）

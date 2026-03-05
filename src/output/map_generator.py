@@ -32,23 +32,44 @@ class MapGenerator:
         
         self.config = config
         
-        # 地图样式配置
+        # 地图样式配置 — 与 yolo_config.yaml classes.names 对应
         self.class_colors = {
-            '违建': '#dc3545',      # 红色
-            '垃圾': '#fd7e14',      # 橙色
-            '污水': '#6f42c1',      # 紫色
-            '违种': '#28a745',      # 绿色
-            'Water Bodies': '#007bff',
-            'Vegetation': '#28a745',
-            'Mining Area': '#6f42c1',
-            'Debris': '#fd7e14',
-            'Industrial Buildings': '#6c757d',
-            'Waterway Facilities': '#17a2b8',
-            'Hydraulic Controls': '#e83e8c',
-            'Residences': '#ffc107',
-            'Sheds': '#20c997',
-            'Storage Zones': '#dc3545',
-            'Recreation Areas': '#f8f9fa'
+            '无': '#adb5bd',
+            '围垦湖泊': '#0d6efd',
+            '非法侵占水域': '#0dcaf0',
+            '阻碍行洪作物': '#198754',
+            '未依法批准围垦河道': '#6610f2',
+            '围占养殖': '#6f42c1',
+            '围网养殖': '#d63384',
+            '坑塘养殖': '#20c997',
+            '文体旅游项目': '#ffc107',
+            '耕地': '#2ecc71',
+            '片林': '#27ae60',
+            '其他占用': '#e67e22',
+            '非法采砂': '#e74c3c',
+            '取土取石': '#c0392b',
+            '在禁采区、禁采期采砂': '#a93226',
+            '不按许可要求采砂': '#cb4335',
+            '其他开采': '#d35400',
+            '弃渣（土）场': '#8e44ad',
+            '垃圾堆放': '#fd7e14',
+            '固体废物': '#e83e8c',
+            '其他堆放': '#f39c12',
+            '弃置、堆放阻碍行洪的物体': '#dc3545',
+            '阻碍行洪建筑物': '#c62828',
+            '未经许可涉河项目': '#ad1457',
+            '修建阻碍行洪的建筑物、构筑物': '#b71c1c',
+            '临河房屋': '#1976d2',
+            '码头': '#00838f',
+            '造（修）船厂': '#00695c',
+            '光伏电厂': '#ff8f00',
+            '砖瓦窑厂': '#795548',
+            '大棚': '#43a047',
+            '桥梁': '#546e7a',
+            '在建桥梁': '#78909c',
+            '拦河闸坝': '#5c6bc0',
+            '在建拦河闸坝': '#7986cb',
+            '其他建（构）筑物': '#8d6e63',
         }
         
         logger.info("地图生成器初始化完成")
@@ -94,6 +115,9 @@ class MapGenerator:
         try:
             # 计算地图边界和中心
             center_lat, center_lon, zoom_level = self._calculate_map_center(geojson_data)
+            
+            # 将 image_path 转为相对于 map.html 的路径
+            self._resolve_image_paths(geojson_data, output_path)
             
             # 生成HTML内容
             html_content = self._generate_html_content(
@@ -166,6 +190,26 @@ class MapGenerator:
             zoom_level = 11
         
         return (center_lat, center_lon, zoom_level)
+    
+    def _resolve_image_paths(
+        self,
+        geojson_data: Dict[str, Any],
+        output_path: str
+    ):
+        """将 GeoJSON 中的 image_path 转为相对于 map.html 输出目录的路径"""
+        map_dir = os.path.dirname(os.path.abspath(output_path))
+        
+        for feature in geojson_data.get('features', []):
+            props = feature.get('properties', {})
+            img_path = props.get('image_path', '')
+            if not img_path:
+                continue
+            try:
+                abs_img = os.path.abspath(img_path)
+                rel_path = os.path.relpath(abs_img, map_dir)
+                props['image_path'] = rel_path.replace('\\', '/')
+            except (ValueError, TypeError):
+                pass
     
     def _generate_html_content(
         self,
@@ -301,6 +345,31 @@ class MapGenerator:
             font-weight: 500;
             text-align: right;
         }}
+        
+        .popup-image {{
+            width: 100%;
+            max-height: 300px;
+            object-fit: contain;
+            border-radius: 4px;
+            border: 1px solid #ddd;
+            margin: 8px 0;
+            cursor: pointer;
+            background: #f5f5f5;
+        }}
+        
+        .popup-image:hover {{
+            border-color: #007bff;
+        }}
+        
+        .popup-no-image {{
+            color: #999;
+            font-size: 12px;
+            text-align: center;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+            margin: 8px 0;
+        }}
     </style>
 </head>
 <body>
@@ -336,22 +405,58 @@ class MapGenerator:
         // 初始化地图
         var map = L.map('map').setView([{center_lat}, {center_lon}], {zoom_level});
         
-        // 添加天地图底图（中国地区推荐）
-        // 备选：OpenStreetMap
-        L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+        // 底图图层
+        var satellite = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+            attribution: '&copy; Esri &mdash; Esri, DeLorme, NAVTEQ',
+            maxZoom: 19
+        }});
+        
+        var osmLayer = L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
             maxZoom: 19
-        }}).addTo(map);
+        }});
+        
+        // 卫星图标注叠加层（地名、道路名）
+        var labels = L.tileLayer('https://{{s}}.basemaps.cartocdn.com/light_only_labels/{{z}}/{{x}}/{{y}}{{r}}.png', {{
+            attribution: '&copy; CARTO',
+            maxZoom: 19,
+            subdomains: 'abcd',
+            pane: 'shadowPane'
+        }});
+        
+        // 默认使用卫星底图 + 标注
+        satellite.addTo(map);
+        labels.addTo(map);
+        
+        // 图层切换控件
+        var baseMaps = {{
+            "卫星地图": satellite,
+            "街道地图": osmLayer
+        }};
+        var overlayMaps = {{
+            "地名标注": labels
+        }};
+        L.control.layers(baseMaps, overlayMaps, {{position: 'topleft'}}).addTo(map);
         
         // 加载GeoJSON数据
         var geojsonData = {geojson_str};
         var classColors = {colors_str};
         
+        // 基于字符串哈希生成 HSL 颜色（用于未预定义的类别）
+        function hashColor(str) {{
+            var h = 0;
+            for (var i = 0; i < str.length; i++) {{
+                h = str.charCodeAt(i) + ((h << 5) - h);
+            }}
+            var hue = ((h % 360) + 360) % 360;
+            return 'hsl(' + hue + ', 70%, 50%)';
+        }}
+        
         // 样式函数
         function getStyle(feature) {{
             var props = feature.properties;
             var className = props.class_name || 'unknown';
-            var color = classColors[className] || '#6c757d';
+            var color = classColors[className] || hashColor(className);
             
             // 根据置信度调整透明度
             var confidence = props.confidence || 0.5;
@@ -375,6 +480,14 @@ class MapGenerator:
                 // 标题
                 popupContent += '<strong>' + p.class_name + '</strong><br>';
                 popupContent += '<hr style="margin: 8px 0; border-color: #ddd;">';
+                
+                // 检测截图
+                if (p.image_path && p.image_path.length > 0) {{
+                    popupContent += '<a href="' + p.image_path + '" target="_blank" title="点击查看原图">';
+                    popupContent += '<img class="popup-image" src="' + p.image_path + '" ';
+                    popupContent += 'onerror="this.parentElement.outerHTML=\\'<div class=popup-no-image>截图未找到</div>\\'" />';
+                    popupContent += '</a>';
+                }}
                 
                 // 基本信息
                 popupContent += '<div class="popup-field">';
@@ -454,7 +567,7 @@ class MapGenerator:
                 popupContent += '</div>';
                 
                 layer.bindPopup(popupContent, {{
-                    maxWidth: 300,
+                    maxWidth: 450,
                     className: 'custom-popup'
                 }});
             }}
@@ -486,7 +599,7 @@ class MapGenerator:
         
         var legendItems = document.getElementById('legend-items');
         Array.from(classSet).sort().forEach(function(className) {{
-            var color = classColors[className] || '#6c757d';
+            var color = classColors[className] || hashColor(className);
             var count = classCounts[className];
             
             var item = document.createElement('div');

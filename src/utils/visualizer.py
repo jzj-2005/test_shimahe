@@ -1,16 +1,66 @@
 """
 可视化模块
 用于实时显示检测结果和相关信息
+支持中文标签渲染（基于 PIL）
 """
 
+import os
+import colorsys
 import cv2
 import numpy as np
 from typing import List, Dict, Any, Optional, Tuple
 from loguru import logger
+from PIL import Image, ImageDraw, ImageFont
+
+
+_FONT_PATH_CACHE: Optional[str] = None
+_PIL_FONT_CACHE: Dict[int, ImageFont.FreeTypeFont] = {}
+
+
+def _find_font_path() -> Optional[str]:
+    """查找系统中可用的中文字体路径"""
+    global _FONT_PATH_CACHE
+    if _FONT_PATH_CACHE is not None:
+        return _FONT_PATH_CACHE
+
+    candidates = [
+        "C:/Windows/Fonts/msyh.ttc",
+        "C:/Windows/Fonts/simhei.ttf",
+        "C:/Windows/Fonts/simsun.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/STHeiti Medium.ttc",
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            _FONT_PATH_CACHE = path
+            return path
+    _FONT_PATH_CACHE = ""
+    return None
+
+
+def get_pil_font(size: int) -> ImageFont.FreeTypeFont:
+    """获取指定大小的 PIL 字体（带缓存），支持中文"""
+    if size in _PIL_FONT_CACHE:
+        return _PIL_FONT_CACHE[size]
+
+    font_path = _find_font_path()
+    if font_path:
+        try:
+            font = ImageFont.truetype(font_path, size)
+        except Exception:
+            font = ImageFont.load_default()
+    else:
+        font = ImageFont.load_default()
+
+    _PIL_FONT_CACHE[size] = font
+    return font
 
 
 class Visualizer:
-    """可视化工具类"""
+    """可视化工具类，支持中文标签"""
     
     def __init__(
         self,
@@ -18,9 +68,8 @@ class Visualizer:
         display_width: int = 1280,
         display_height: int = 720,
         box_color: Tuple[int, int, int] = (0, 255, 0),
-        box_thickness: int = 6,
-        font_scale: float = 1.2,
-        font_thickness: int = 3
+        box_thickness: int = 2,
+        font_size: Optional[int] = None
     ):
         """
         初始化可视化工具
@@ -31,31 +80,29 @@ class Visualizer:
             display_height: 显示窗口高度
             box_color: 检测框颜色 (BGR格式)
             box_thickness: 检测框线条粗细
-            font_scale: 字体大小
-            font_thickness: 字体粗细
+            font_size: 标签字体像素大小，None 则根据图像尺寸自动计算
         """
         self.window_name = window_name
         self.display_width = display_width
         self.display_height = display_height
         self.box_color = box_color
         self.box_thickness = box_thickness
-        self.font_scale = font_scale
-        self.font_thickness = font_thickness
+        self.font_size = font_size
         
-        # 为不同类别定义颜色映射（BGR格式）
-        self.class_colors = {
-            'Water Bodies': (255, 200, 0),         # 浅蓝色 - 水体
-            'Vegetation': (0, 255, 0),             # 绿色 - 植被
-            'Mining Area': (255, 0, 0),            # 蓝色 - 采矿区
-            'Debris': (0, 165, 255),               # 橙色 - 垃圾
-            'Industrial Buildings': (128, 0, 128), # 深紫 - 工业建筑
-            'Waterway Facilities': (255, 255, 0),  # 青色 - 水务设施
-            'Hydraulic Controls': (203, 192, 255), # 粉色 - 水利控制
-            'Residences': (0, 255, 255),           # 黄色 - 住宅
-            'Sheds': (0, 255, 255),                # 黄色 - 棚子
-            'Storage Zones': (255, 0, 255),        # 紫色 - 堆放区
-            'Recreation Areas': (147, 20, 255),    # 粉红 - 娱乐区
-            'default': (0, 255, 0)                 # 默认绿色
+        # 预定义类别颜色映射（BGR 格式），未命中时自动生成
+        self.class_colors: Dict[str, Tuple[int, int, int]] = {
+            'Water Bodies': (255, 200, 0),
+            'Vegetation': (0, 255, 0),
+            'Mining Area': (255, 0, 0),
+            'Debris': (0, 165, 255),
+            'Industrial Buildings': (128, 0, 128),
+            'Waterway Facilities': (255, 255, 0),
+            'Hydraulic Controls': (203, 192, 255),
+            'Residences': (0, 255, 255),
+            'Sheds': (0, 255, 255),
+            'Storage Zones': (255, 0, 255),
+            'Recreation Areas': (147, 20, 255),
+            'default': (0, 255, 0),
         }
         
         # 创建窗口
@@ -63,6 +110,16 @@ class Visualizer:
         cv2.resizeWindow(self.window_name, display_width, display_height)
         
         logger.info(f"可视化窗口已创建: {window_name}")
+
+    def _get_class_color(self, class_name: str) -> Tuple[int, int, int]:
+        """获取类别颜色，对未知类别自动生成视觉上可区分的颜色"""
+        if class_name in self.class_colors:
+            return self.class_colors[class_name]
+        hue = (hash(class_name) * 0.618033988749895) % 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, 0.8, 0.95)
+        color = (int(b * 255), int(g * 255), int(r * 255))
+        self.class_colors[class_name] = color
+        return color
     
     def draw_detections(
         self,
@@ -72,78 +129,54 @@ class Visualizer:
         show_confidence: bool = True
     ) -> np.ndarray:
         """
-        在图像上绘制检测结果
-        
-        Args:
-            image: 输入图像
-            detections: 检测结果列表
-            show_labels: 是否显示类别标签
-            show_confidence: 是否显示置信度
-            
-        Returns:
-            绘制后的图像
+        在图像上绘制检测结果（使用 PIL 渲染文本以支持中文标签）
         """
-        # 复制图像以避免修改原图
         img = image.copy()
+        h, w = img.shape[:2]
+        
+        font_size = self.font_size or max(round(max(h, w) / 150), 10)
+        labels_to_draw = []
         
         for det in detections:
-            # 获取检测框四角点坐标
             corners = det.get('corners', [])
             if len(corners) != 4:
                 continue
             
-            # 转换为整数坐标
             pts = np.array([[int(x), int(y)] for x, y in corners], dtype=np.int32)
-            
-            # 根据类别选择颜色
             class_name = det.get('class_name', 'default')
-            color = self.class_colors.get(class_name, self.class_colors['default'])
+            color = self._get_class_color(class_name)
             
-            # 绘制矩形框
             cv2.polylines(img, [pts], isClosed=True, color=color, thickness=self.box_thickness)
             
-            # 准备标签文本
             label_parts = []
             if show_labels and 'class_name' in det:
                 label_parts.append(det['class_name'])
             if show_confidence and 'confidence' in det:
                 label_parts.append(f"{det['confidence']:.2f}")
             
-            # 绘制标签
             if label_parts:
                 label = ' '.join(label_parts)
-                
-                # 获取文本大小
-                (text_width, text_height), baseline = cv2.getTextSize(
-                    label, cv2.FONT_HERSHEY_SIMPLEX, self.font_scale, self.font_thickness
+                top_corner = min(corners, key=lambda c: c[1])
+                x, y = int(top_corner[0]), int(top_corner[1])
+                labels_to_draw.append((label, x, y, color))
+        
+        if labels_to_draw:
+            pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            draw = ImageDraw.Draw(pil_img)
+            font = get_pil_font(font_size)
+            pad = max(font_size // 6, 2)
+            
+            for label, x, y, color_bgr in labels_to_draw:
+                color_rgb = (color_bgr[2], color_bgr[1], color_bgr[0])
+                text_y = max(0, y - font_size - pad * 2)
+                bbox = draw.textbbox((x, text_y), label, font=font)
+                draw.rectangle(
+                    [bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad],
+                    fill=color_rgb
                 )
-                
-                # 计算标签背景位置
-                x1, y1 = int(corners[0][0]), int(corners[0][1])
-                
-                # 在标签位置上方留出更多空间
-                label_y_top = max(y1 - text_height - baseline - 10, text_height + baseline + 10)
-                label_y_bottom = label_y_top + text_height + baseline + 10
-                
-                # 绘制标签背景（使用类别颜色）
-                cv2.rectangle(
-                    img,
-                    (x1, label_y_top),
-                    (x1 + text_width + 10, label_y_bottom),
-                    color,
-                    -1
-                )
-                
-                # 绘制标签文本（白色，加粗）
-                cv2.putText(
-                    img,
-                    label,
-                    (x1 + 5, label_y_bottom - baseline - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    self.font_scale,
-                    (255, 255, 255),
-                    self.font_thickness
-                )
+                draw.text((x, text_y), label, font=font, fill=(255, 255, 255))
+            
+            img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
         
         return img
     

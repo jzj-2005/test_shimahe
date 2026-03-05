@@ -86,6 +86,8 @@ visualization:
   show_performance_info: true
   box_color: [0, 255, 0]
   box_thickness: 2
+  # 标签字体大小（像素），留空则根据图像尺寸自动计算
+  # font_size: 20
 
 # 性能监控
 performance:
